@@ -97,9 +97,9 @@ def preprocess_one_csv(in_path: str, out_path: str, cal_dates: pd.DatetimeIndex)
     df[INTERP_COLS] = df[INTERP_COLS].bfill().ffill()
 
     # 3) 고가/저가/종가는 항상 시가와 동일하게 강제
-    df["고가"] = df["시가"]
-    df["저가"] = df["시가"]
-    df["종가"] = df["시가"]
+    df["고가"] = df["고가"].fillna(df["시가"])
+    df["저가"] = df["저가"].fillna(df["시가"])
+    df["종가"] = df["종가"].fillna(df["시가"])
 
     # predictable: 보간이 필요했던 날은 0, 나머지 1
     predictable = (~interpolation_needed).astype(int)
