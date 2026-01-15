@@ -8,6 +8,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
+# pip install torchsummary  (필요하면)
+from torchsummary import summary
 
 import numpy as np
 from tqdm import tqdm
@@ -206,7 +208,6 @@ def eps_from_v_yt(v: torch.Tensor, y_t: torch.Tensor, ab_t: torch.Tensor) -> tor
     sqrt_ab = torch.sqrt(ab_t).unsqueeze(1)
     sqrt_1mab = torch.sqrt(1.0 - ab_t).unsqueeze(1)
     return sqrt_1mab * y_t + sqrt_ab * v
-
 
 # =========================
 # Embeddings
@@ -624,6 +625,9 @@ def main():
         d_ff=D_FF,
         dropout=DROPOUT,
     ).to(DEVICE)
+
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"Total parameters: {total_params}")
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     scaler = torch.amp.GradScaler("cuda", enabled=AMP)
