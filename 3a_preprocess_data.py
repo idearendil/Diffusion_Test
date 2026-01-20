@@ -108,9 +108,19 @@ def add_features_and_labels(df: pd.DataFrame, ticker: str) -> pd.DataFrame:
     df = df.copy()
     df = df.sort_values(DATE_COL)
 
-    # 날짜 파생
-    df["day_of_month"] = df[DATE_COL].dt.day
-    df["day_of_week"] = df[DATE_COL].dt.dayofweek
+    # day_of_month: 1~31 (월마다 일수가 다르므로 "해당 월의 일수"로 스케일링하는 게 보통 더 좋음)
+    dom = df[DATE_COL].dt.day.astype(np.float32)                  # 1..31
+    dim = df[DATE_COL].dt.days_in_month.astype(np.float32)        # 28..31
+
+    dom_phase = 2.0 * np.pi * (dom - 1.0) / dim                   # 0..2pi
+    df["dom_sin"] = np.sin(dom_phase)
+    df["dom_cos"] = np.cos(dom_phase)
+
+    # day_of_week: pandas dayofweek = 0(Mon) .. 6(Sun)
+    dow = df[DATE_COL].dt.dayofweek.astype(np.float32)            # 0..6
+    dow_phase = 2.0 * np.pi * dow / 7.0
+    df["dow_sin"] = np.sin(dow_phase)
+    df["dow_cos"] = np.cos(dow_phase)
 
     # 0) 가격 관련 파생
     prev_close = df[CLOSE_COL].shift(1)
@@ -165,8 +175,32 @@ def add_features_and_labels(df: pd.DataFrame, ticker: str) -> pd.DataFrame:
     df["mom_5"] = log_close - log_close.shift(5)
     df["mom_20"] = log_close - log_close.shift(20)
 
+    # True Range
+    prev_close = df[CLOSE_COL].shift(1)
+    tr = np.maximum(
+        df[HIGH_COL] - df[LOW_COL],
+        np.maximum(
+            (df[HIGH_COL] - prev_close).abs(),
+            (df[LOW_COL] - prev_close).abs()
+        )
+    )
+    for w in [5, 14, 20]:
+        df[f"atr_{w}"] = tr.rolling(window=w, min_periods=w//2).mean()
+        df[f"atr_ratio_{w}"] = df[f"atr_{w}"] / (df[CLOSE_COL] + 1.0)
+
+    # Candle Body Ratio / Upper/Lower Wick Ratio
+    body = (df[CLOSE_COL] - df[OPEN_COL]).abs()
+    upper_wick = df[HIGH_COL] - np.maximum(df[CLOSE_COL], df[OPEN_COL])
+    lower_wick = np.minimum(df[CLOSE_COL], df[OPEN_COL]) - df[LOW_COL]
+    range_ = (df[HIGH_COL] - df[LOW_COL]) + 1e-6
+    df["candle_body_ratio"] = body / range_
+    df["upper_wick_ratio"] = upper_wick / range_
+    df["lower_wick_ratio"] = lower_wick / range_
+    df["bullish"] = (df[CLOSE_COL] > df[OPEN_COL]).astype(np.float32)
+
     # ===== Label =====
     df[LABEL_COL] = (df[CLOSE_COL].shift(-1) / df[CLOSE_COL] - 1) * 10.0
+    df[LABEL_COL] = (df[LABEL_COL] - np.mean(df[LABEL_COL])) / np.std(df[LABEL_COL])
 
     # 다음날 없는 마지막 행 + 이전 행들이 적은 첫 부분 행들 제거
     df = df.dropna()
@@ -280,7 +314,7 @@ def build_dataset():
     train_all = pd.concat(list(train_dfs.values()), ignore_index=True)
 
     # label clip (원 코드 유지)
-    train_all[LABEL_COL] = np.clip(train_all[LABEL_COL].values, -3.0, 3.0)
+    train_all[LABEL_COL] = np.clip(train_all[LABEL_COL].values, -10.0, 10.0)
 
     # 통계 계산용 feature cols
     feature_cols_all = feature_cols_order[:]  # 순서 유지

@@ -1,0 +1,303 @@
+import os
+from pathlib import Path
+from typing import Dict, List, Tuple
+
+import numpy as np
+import pandas as pd
+from tqdm import tqdm
+import torch
+
+# === 경로 & 컬럼 설정 ===
+REFINED_DIR = Path("refined_data")
+
+BACKTEST_ROOT = Path("backtest") / "tensor_data"
+BACKTEST_ROOT.mkdir(parents=True, exist_ok=True)
+
+DATE_COL = "날짜"
+OPEN_COL = "시가"
+HIGH_COL = "고가"
+LOW_COL = "저가"
+CLOSE_COL = "종가"
+VOLUME_COL = "거래량"
+
+LABEL_COL = "label1"
+CHANGE_RATE_COL = "ret_pct"  # 종가 기준 일간 수익률(%)
+
+TEST_START = pd.Timestamp("2017-03-01")
+TEST_END   = pd.Timestamp("2025-12-31")
+
+
+# =========================
+# Utils
+# =========================
+def is_volume_related(col: str) -> bool:
+    return col.startswith("vol_") or ("거래량" in col)
+
+
+def split_4_1(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """앞에서부터 순서대로 4:1 비율 split (train/val)."""
+    n = len(df)
+    train_end = (n * 4) // 5
+
+    # 안전장치
+    train_end = max(train_end, 1)
+    train_end = min(train_end, n - 1)
+
+    train_df = df.iloc[:train_end].copy()
+    val_df = df.iloc[train_end:].copy()
+    return train_df, val_df
+
+
+def clip_features(df: pd.DataFrame) -> pd.DataFrame:
+    """(label, vol_* 제외) feature를 -10~10 클리핑"""
+    df = df.copy()
+    feature_cols = [c for c in df.columns if c != LABEL_COL and c != DATE_COL]
+    clip_cols = [c for c in feature_cols if not is_volume_related(c)]
+    if clip_cols:
+        df[clip_cols] = df[clip_cols].clip(-10.0, 10.0)
+    return df
+
+
+def standardize_df(df: pd.DataFrame, feature_cols: List[str], mean: pd.Series, std: pd.Series) -> pd.DataFrame:
+    df = df.copy()
+
+    # 컬럼 순서 맞춤
+    df = df[[*feature_cols, LABEL_COL]]
+
+    x = (df[feature_cols] - mean) / std
+    x = x.fillna(0.0)
+
+    out = pd.concat([x, df[[LABEL_COL]].astype(np.float32)], axis=1)
+    return out
+
+
+def save_tensors(df: pd.DataFrame, feature_cols: List[str], out_dir: Path, ticker: str) -> None:
+    x = df[feature_cols].values.astype(np.float32)
+    y = df[LABEL_COL].values.astype(np.float32)
+
+    x_t = torch.tensor(x, dtype=torch.float32)
+    y_t = torch.tensor(y, dtype=torch.float32)
+
+    torch.save(x_t, out_dir / f"{ticker}_x.pt")
+    torch.save(y_t, out_dir / f"{ticker}_y.pt")
+
+
+# =========================
+# Feature / Label
+# =========================
+def add_features_and_labels(df: pd.DataFrame, ticker: str) -> pd.DataFrame:
+    df = df.copy()
+    df = df.sort_values(DATE_COL)
+
+    # (추가) dom/dow 순환 인코딩
+    dom = df[DATE_COL].dt.day.astype(np.float32)
+    dim = df[DATE_COL].dt.days_in_month.astype(np.float32)
+    dom_phase = 2.0 * np.pi * (dom - 1.0) / dim
+    df["dom_sin"] = np.sin(dom_phase)
+    df["dom_cos"] = np.cos(dom_phase)
+
+    dow = df[DATE_COL].dt.dayofweek.astype(np.float32)  # 0..6
+    dow_phase = 2.0 * np.pi * dow / 7.0
+    df["dow_sin"] = np.sin(dow_phase)
+    df["dow_cos"] = np.cos(dow_phase)
+
+    # 0) 가격 관련 파생
+    prev_close = df[CLOSE_COL].shift(1)
+    df["gap"] = (df[OPEN_COL] - prev_close) / (prev_close + 1.0)
+    df["high_low_spread"] = (df[HIGH_COL] - df[LOW_COL]) / (df[CLOSE_COL] + 1.0)
+
+    # 종가 기반 일간 수익률(%)
+    df[CHANGE_RATE_COL] = (df[CLOSE_COL] / (df[CLOSE_COL].shift(1) + 1e-12) - 1.0) * 100.0
+
+    # 거래량 파생
+    df["vol_ma_5"] = df[VOLUME_COL].rolling(window=5, min_periods=3).mean()
+    df["vol_ma_20"] = df[VOLUME_COL].rolling(window=20, min_periods=6).mean()
+    df["vol_ma_60"] = df[VOLUME_COL].rolling(window=60, min_periods=20).mean()
+    df["vol_ratio_5"] = df[VOLUME_COL] / (df["vol_ma_5"] + 1.0)
+    df["vol_ratio_20"] = df[VOLUME_COL] / (df["vol_ma_20"] + 1.0)
+    df["vol_ratio_60"] = df[VOLUME_COL] / (df["vol_ma_60"] + 1.0)
+    df["vol_diff"] = df[VOLUME_COL] / (df[VOLUME_COL].shift(1) + 1.0)
+    df["vol_diff"] = np.clip(df["vol_diff"].values, 0.0, 10.0)
+    df["vol_diff_ma_5"] = df["vol_diff"].diff().rolling(window=5, min_periods=3).mean()
+    df["vol_diff_ma_20"] = df["vol_diff"].diff().rolling(window=20, min_periods=6).mean()
+    df["vol_diff_ma_60"] = df["vol_diff"].diff().rolling(window=60, min_periods=20).mean()
+
+    # 과거 수익률 평균/변동성
+    for w in [5, 10, 20, 60]:
+        minp = max(3, w // 3)
+        df[f"ret_mean_{w}"] = df[CHANGE_RATE_COL].rolling(window=w, min_periods=minp).mean()
+        df[f"ret_std_{w}"] = df[CHANGE_RATE_COL].rolling(window=w, min_periods=minp).std()
+
+    df[CHANGE_RATE_COL + "_2"] = df[CHANGE_RATE_COL].shift(1)
+    df[CHANGE_RATE_COL + "_3"] = df[CHANGE_RATE_COL].shift(2)
+    df[CHANGE_RATE_COL + "_4"] = df[CHANGE_RATE_COL].shift(3)
+    df[CHANGE_RATE_COL + "_5"] = df[CHANGE_RATE_COL].shift(4)
+
+    # 갭 평균
+    for w in [5, 10, 20]:
+        minp = max(3, w // 3)
+        df[f"gap_mean_{w}"] = df["gap"].rolling(window=w, min_periods=minp).mean()
+
+    # 가격 레벨 대비
+    for w in [5, 20, 60]:
+        minp = max(3, w // 3)
+        roll_mean = df[CLOSE_COL].rolling(window=w, min_periods=minp).mean()
+        roll_max = df[CLOSE_COL].rolling(window=w, min_periods=minp).max()
+        roll_min = df[CLOSE_COL].rolling(window=w, min_periods=minp).min()
+        df[f"close_to_ma_{w}"] = df[CLOSE_COL] / (roll_mean + 1.0)
+        df[f"close_to_max_{w}"] = df[CLOSE_COL] / (roll_max + 1.0)
+        df[f"close_to_min_{w}"] = df[CLOSE_COL] / (roll_min + 1.0)
+
+    # 모멘텀
+    log_close = np.log(df[CLOSE_COL] + 1.0)
+    df["mom_5"] = log_close - log_close.shift(5)
+    df["mom_20"] = log_close - log_close.shift(20)
+
+    # ===== Label =====
+    # 다음날 종가 상승률 * 10
+    df[LABEL_COL] = (df[CLOSE_COL].shift(-1) / df[CLOSE_COL] - 1) * 10.0
+
+    df = df.dropna()
+    return df
+
+
+def prepare_full_dfs() -> Tuple[Dict[str, pd.DataFrame], List[str]]:
+    """
+    모든 ticker CSV를 한 번 읽어서 feature/label 만든 뒤
+    (DATE_COL 유지) full_df[ticker]로 보관.
+    + feature 컬럼 전역 순서(feature_cols_order) 생성.
+    """
+    csv_paths = sorted(REFINED_DIR.glob("*.csv"))
+    if not csv_paths:
+        raise FileNotFoundError("refined_data 폴더에 CSV가 없습니다.")
+
+    full_dfs: Dict[str, pd.DataFrame] = {}
+    feature_cols_order: List[str] = []
+
+    for csv_path in tqdm(csv_paths, desc="Reading & featurizing CSVs"):
+        ticker = csv_path.stem
+        tmp = pd.read_csv(csv_path)
+        tmp[DATE_COL] = pd.to_datetime(tmp[DATE_COL])
+
+        df = add_features_and_labels(tmp, ticker)
+
+        # 원본 컬럼 drop (DATE_COL은 유지해야 월별 필터링 가능)
+        df = df.drop(columns=[OPEN_COL, CLOSE_COL, HIGH_COL, LOW_COL, VOLUME_COL, "vol_ma_5", "vol_ma_20", "vol_ma_60"], errors="ignore")
+
+        # clip
+        df = clip_features(df)
+
+        full_dfs[ticker] = df
+
+        # feature cols order
+        cur_feats = [c for c in df.columns if c not in (LABEL_COL, DATE_COL)]
+        if not feature_cols_order:
+            feature_cols_order = cur_feats
+        else:
+            exist = set(feature_cols_order)
+            for c in cur_feats:
+                if c not in exist:
+                    feature_cols_order.append(c)
+                    exist.add(c)
+
+    return full_dfs, feature_cols_order
+
+
+def build_monthly_backtest_datasets():
+    full_dfs, feature_cols = prepare_full_dfs()
+    tickers = sorted(full_dfs.keys())
+    print(f"Tickers loaded: {len(tickers)}")
+    print(f"Num features: {len(feature_cols)}")
+
+    # 월 시작 리스트 (MS = month start)
+    month_starts = pd.date_range(TEST_START, TEST_END, freq="MS")
+
+    for test_start in month_starts:
+        test_end = (test_start + pd.offsets.MonthEnd(1))
+        if test_end > TEST_END:
+            test_end = TEST_END
+
+        tag = test_start.strftime("%Y-%m-%d")
+        out_base = BACKTEST_ROOT / tag
+        train_out = out_base / "train"
+        val_out   = out_base / "val"
+        test_out  = out_base / "test"
+        train_out.mkdir(parents=True, exist_ok=True)
+        val_out.mkdir(parents=True, exist_ok=True)
+        test_out.mkdir(parents=True, exist_ok=True)
+
+        # --- split별 df 담기 ---
+        train_pool_dfs: Dict[str, pd.DataFrame] = {}
+        test_dfs: Dict[str, pd.DataFrame] = {}
+        train_dfs: Dict[str, pd.DataFrame] = {}
+        val_dfs: Dict[str, pd.DataFrame] = {}
+
+        # 1) test_start 이전 = train/val pool, test_start~test_end = test
+        for tkr in tickers:
+            df = full_dfs[tkr]
+
+            # 날짜 필터링
+            pool = df[df[DATE_COL] < test_start].copy()
+            test = df[(df[DATE_COL] >= test_start) & (df[DATE_COL] <= test_end)].copy()
+
+            pool = pool.sort_values(DATE_COL).reset_index(drop=True)
+            test = test.sort_values(DATE_COL).reset_index(drop=True)
+
+            pool_len = len(pool)
+            test_len = len(test)
+
+            train_pool_dfs[tkr] = pool
+            test_dfs[tkr] = test
+
+            tr, va = split_4_1(pool)
+            train_dfs[tkr] = tr
+            val_dfs[tkr] = va
+
+        # 4) 표준화 통계는 "train만"으로 계산 (DATE_COL 제외)
+        train_all = pd.concat(list(train_dfs.values()), ignore_index=True)
+
+        # label clip
+        train_all[LABEL_COL] = np.clip(train_all[LABEL_COL].values, -3.0, 3.0)
+
+        feat_mean = train_all[feature_cols].mean()
+        feat_std = train_all[feature_cols].std(ddof=0).replace(0.0, 1.0)
+
+        # stats 저장 (각 월 폴더에)
+        stats_path = out_base / "feature_standardize_stats.npz"
+        np.savez(
+            stats_path,
+            feature_cols=np.array(feature_cols, dtype=object),
+            mean=feat_mean.values.astype(np.float32),
+            std=feat_std.values.astype(np.float32),
+        )
+
+        # 5) 정규화 + 텐서 저장 (train/val/test)
+        for tkr in tickers:
+            # label clip 일관 적용
+            train_dfs[tkr][LABEL_COL] = np.clip(train_dfs[tkr][LABEL_COL].values, -3.0, 3.0)
+            val_dfs[tkr][LABEL_COL]   = np.clip(val_dfs[tkr][LABEL_COL].values, -3.0, 3.0)
+            test_dfs[tkr][LABEL_COL]  = np.clip(test_dfs[tkr][LABEL_COL].values, -3.0, 3.0)
+
+            # DATE_COL 제거하고 standardize
+            tr = train_dfs[tkr].drop(columns=[DATE_COL], errors="ignore")
+            va = val_dfs[tkr].drop(columns=[DATE_COL], errors="ignore")
+            te = test_dfs[tkr].drop(columns=[DATE_COL], errors="ignore")
+
+            tr_std = standardize_df(tr, feature_cols, feat_mean, feat_std)
+            va_std = standardize_df(va, feature_cols, feat_mean, feat_std)
+            te_std = standardize_df(te, feature_cols, feat_mean, feat_std)
+
+            # clip (표준화 후에도 동일 규칙 적용)
+            tr_std = clip_features(tr_std)
+            va_std = clip_features(va_std)
+            te_std = clip_features(te_std)
+
+            save_tensors(tr_std, feature_cols, train_out, tkr)
+            save_tensors(va_std, feature_cols, val_out, tkr)
+            save_tensors(te_std, feature_cols, test_out, tkr)
+
+        print(f"[OK] {tag} saved -> {out_base} | pool_len={pool_len}, test_len={test_len}")
+
+
+if __name__ == "__main__":
+    build_monthly_backtest_datasets()
