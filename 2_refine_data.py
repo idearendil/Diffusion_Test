@@ -117,6 +117,13 @@ def preprocess_one_csv(in_path: str, out_path: str, cal_dates: pd.DatetimeIndex)
         df.get("predictable", 1)  # 기존 값 유지, 없으면 기본 1
     )
 
+    # 거래량이 너무 적은 행도 predictable=0
+    df["predictable"] = np.where(
+        (df["거래량"] * df["시가"] <= 2000000000),
+        0,
+        df.get("predictable", 1)  # 기존 값 유지, 없으면 기본 1
+    )
+
     # 날짜 컬럼 복구
     df = df.reset_index().rename(columns={"index": DATE_COL})
 

@@ -198,6 +198,40 @@ def add_features_and_labels(df: pd.DataFrame, ticker: str) -> pd.DataFrame:
     df["lower_wick_ratio"] = lower_wick / range_
     df["bullish"] = (df[CLOSE_COL] > df[OPEN_COL]).astype(np.float32)
 
+    # MACD
+    def ema(series, span):
+        return series.ewm(span=span, adjust=False).mean()
+    ema12 = ema(df[CLOSE_COL], 12)
+    ema26 = ema(df[CLOSE_COL], 26)
+    df["macd"] = ema12 - ema26
+    df["macd_signal"] = ema(df["macd"], 9)
+    df["macd_hist"] = df["macd"] - df["macd_signal"]
+
+    # RSI
+    delta = df[CLOSE_COL].diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.rolling(14, min_periods=7).mean()
+    avg_loss = loss.rolling(14, min_periods=7).mean()
+    rs = avg_gain / (avg_loss + 1e-6)
+    df["rsi_14"] = 100 - (100 / (1 + rs))
+
+    # Bollinger Bands
+    ma20 = df[CLOSE_COL].rolling(20, min_periods=10).mean()
+    std20 = df[CLOSE_COL].rolling(20, min_periods=10).std()
+    df["bb_upper"] = (ma20 + 2 * std20) / (df[CLOSE_COL] + 1.0)
+    df["bb_lower"] = (ma20 - 2 * std20) / (df[CLOSE_COL] + 1.0)
+    df["bb_width"] = (2 * std20) / (ma20 + 1.0)
+
+    # OBV
+    direction = np.sign(df[CLOSE_COL].diff()).fillna(0)
+    df["obv"] = (direction * df[VOLUME_COL]).cumsum()
+    df["obv_ma_20"] = df["obv"].rolling(20, min_periods=10).mean()
+
+    # VPT
+    df["vpt"] = ((df[CLOSE_COL] - df[CLOSE_COL].shift(1)) /
+             (df[CLOSE_COL].shift(1) + 1e-6) * df[VOLUME_COL]).cumsum()
+
     # ===== Label =====
     df[LABEL_COL] = (df[CLOSE_COL].shift(-1) / df[CLOSE_COL] - 1) * 10.0
     df[LABEL_COL] = (df[LABEL_COL] - np.mean(df[LABEL_COL])) / np.std(df[LABEL_COL])
