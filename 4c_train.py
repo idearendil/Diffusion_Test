@@ -1,12 +1,13 @@
-# train_regression_ensemble.py
+# train_regression_ensemble_fixed.py
 import csv
 from pathlib import Path
 from typing import List
 
 import torch
 from torch.utils.data import DataLoader
-import matplotlib.pyplot as plt
 from tqdm import tqdm
+import matplotlib.pyplot as plt
+import pandas as pd
 
 from utils import set_seed, list_tickers, load_split_tensors, TimeIndexDataset
 from model_regression import RegressionTransformer
@@ -20,33 +21,39 @@ OUT_DIR = Path("regression_runs")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+AMP = (DEVICE == "cuda")
 
-SEEDS = [42, 43, 44, 45, 46, 47, 48, 49, 50, 51]
+SEEDS = [42, 43, 44]
 
 TRAIN_BATCH_SIZE = 16
 TEST_BATCH_SIZE = 2048
 
-EPOCHS = 50
+EPOCHS = 40
 LR = 2e-4
 WEIGHT_DECAY = 1e-4
 GRAD_CLIP = 1.0
-AMP = (DEVICE == "cuda")
 
 LOG_CSV = OUT_DIR / "metrics.csv"
 
 
-def weighted_ensemble(preds: List[torch.Tensor], weights: List[float]):
-    """
-    preds: list of [B, N] tensors
-    weights: list of scalars (val_corr)
-    """
-    w = torch.tensor(weights, device=preds[0].device)
-    w = torch.clamp(w, min=0.0)  # 음수 corr 제거
-    w = w / (w.sum() + 1e-8)
+# =========================
+# Token Masking Schedule
+# =========================
+def token_mask_ratio(epoch, max_epoch, start=0.3, end=0.0):
+    alpha = epoch / max_epoch
+    return start * (1 - alpha) + end * alpha
 
-    stacked = torch.stack(preds)          # [M, B, N]
-    y_hat = (stacked * w[:, None, None]).sum(0)
-    return y_hat
+
+def apply_token_mask(x, mask_ratio):
+    if mask_ratio <= 0:
+        return x
+
+    B, N, F = x.shape
+    mask = torch.rand(B, N, device=x.device) < mask_ratio
+    x = x.clone()
+    x[mask] = 0.0
+    return x
+
 
 # =========================
 # Loss
@@ -59,12 +66,25 @@ def corr_loss(y_hat, y, mask):
 
     cov = (y_hat0 * y0).sum(1)
     std = torch.sqrt((y_hat0**2).sum(1) * (y0**2).sum(1) + 1e-8)
+
     corr = cov / std
     return 1 - corr.mean()
 
 
 # =========================
-# Eval (single model)
+# Weighted Ensemble
+# =========================
+def weighted_ensemble(preds: List[torch.Tensor], weights: List[float]):
+    w = torch.tensor(weights, device=preds[0].device)
+    w = torch.clamp(w, min=0.0)
+    w = w / (w.sum() + 1e-8)
+
+    stacked = torch.stack(preds)  # [M, B, N]
+    return (stacked * w[:, None, None]).sum(0)
+
+
+# =========================
+# Evaluation (single model)
 # =========================
 @torch.no_grad()
 def evaluate(model, loader):
@@ -76,9 +96,11 @@ def evaluate(model, loader):
     for x, y in loader:
         x = x.to(DEVICE)
         y = y.to(DEVICE)
+
+        # z-score per sample
         y = (y - y.mean(dim=1, keepdim=True)) / (y.std(dim=1, keepdim=True) + 1e-6)
 
-        mask = (x[:, :, 0] != 0).float()
+        mask = (x.abs().sum(dim=2) != 0).float()
         y_hat = model(x)
 
         diff = (y_hat - y) * mask
@@ -99,15 +121,11 @@ def evaluate(model, loader):
         total_corr += corr.item()
         n_batches += 1
 
-    return (
-        total_rmse / n_batches,
-        total_mae / n_batches,
-        total_corr / n_batches,
-    )
+    return total_rmse / n_batches, total_mae / n_batches, total_corr / n_batches
 
 
 # =========================
-# Eval (ensemble)
+# Evaluation (ensemble)
 # =========================
 @torch.no_grad()
 def evaluate_ensemble(models, weights, loader):
@@ -120,9 +138,9 @@ def evaluate_ensemble(models, weights, loader):
     for x, y in loader:
         x = x.to(DEVICE)
         y = y.to(DEVICE)
-        y = (y - y.mean(dim=1, keepdim=True)) / (y.std(dim=1, keepdim=True) + 1e-6)
 
-        mask = (x[:, :, 0] != 0).float()
+        y = (y - y.mean(dim=1, keepdim=True)) / (y.std(dim=1, keepdim=True) + 1e-6)
+        mask = (x.abs().sum(dim=2) != 0).float()
 
         preds = [m(x) for m in models]
         y_hat = weighted_ensemble(preds, weights)
@@ -145,11 +163,7 @@ def evaluate_ensemble(models, weights, loader):
         total_corr += corr.item()
         n_batches += 1
 
-    return (
-        total_rmse / n_batches,
-        total_mae / n_batches,
-        total_corr / n_batches,
-    )
+    return total_rmse / n_batches, total_mae / n_batches, total_corr / n_batches
 
 
 # =========================
@@ -157,17 +171,22 @@ def evaluate_ensemble(models, weights, loader):
 # =========================
 def train_one_epoch(model, loader, optimizer, scaler, scheduler, epoch):
     model.train()
-    pbar = tqdm(loader, desc=f"Epoch {epoch}", leave=False)
+    mask_ratio = token_mask_ratio(epoch, EPOCHS)
 
+    pbar = tqdm(loader, desc=f"Epoch {epoch}", leave=False, ncols=120)
     running = 0.0
     n_batches = 0
 
     for x, y in pbar:
         x = x.to(DEVICE)
         y = y.to(DEVICE)
+
         y = (y - y.mean(dim=1, keepdim=True)) / (y.std(dim=1, keepdim=True) + 1e-6)
 
-        mask = (x[:, :, 0] != 0).float()
+        # 🔑 mask는 token masking 이전 기준
+        mask = (x.abs().sum(dim=2) != 0).float()
+        x = apply_token_mask(x, mask_ratio)
+
         optimizer.zero_grad(set_to_none=True)
 
         with torch.amp.autocast("cuda", enabled=AMP):
@@ -175,11 +194,6 @@ def train_one_epoch(model, loader, optimizer, scaler, scheduler, epoch):
             loss_mse = ((y_hat - y).pow(2) * mask).sum() / (mask.sum() + 1e-8)
             loss_corr = corr_loss(y_hat, y, mask)
             loss = 0.5 * loss_mse + 0.5 * loss_corr
-            # if epoch < EPOCHS * 0.5:
-            #     loss = loss_mse
-            # else:
-            #     alpha = (epoch - EPOCHS*0.5) / (EPOCHS*0.5)
-            #     loss = (1 - alpha) * loss_mse + alpha * loss_corr
 
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
@@ -191,6 +205,12 @@ def train_one_epoch(model, loader, optimizer, scaler, scheduler, epoch):
 
         running += loss.item()
         n_batches += 1
+
+        pbar.set_postfix({
+            "loss": f"{running / n_batches:.5f}",
+            "lr": f"{optimizer.param_groups[0]['lr']:.2e}",
+            "mask": f"{mask_ratio:.2f}",
+        })
 
     return running / n_batches
 
@@ -209,12 +229,20 @@ def main():
     X_val, Y_val = load_split_tensors(val_dir, tickers)
     X_test, Y_test = load_split_tensors(test_dir, tickers)
 
-    train_loader = DataLoader(TimeIndexDataset(X_train, Y_train),
-                              batch_size=TRAIN_BATCH_SIZE, shuffle=True, drop_last=True)
-    val_loader = DataLoader(TimeIndexDataset(X_val, Y_val),
-                            batch_size=TEST_BATCH_SIZE)
-    test_loader = DataLoader(TimeIndexDataset(X_test, Y_test),
-                             batch_size=TEST_BATCH_SIZE)
+    train_loader = DataLoader(
+        TimeIndexDataset(X_train, Y_train),
+        batch_size=TRAIN_BATCH_SIZE,
+        shuffle=True,
+        drop_last=True
+    )
+    val_loader = DataLoader(
+        TimeIndexDataset(X_val, Y_val),
+        batch_size=TEST_BATCH_SIZE
+    )
+    test_loader = DataLoader(
+        TimeIndexDataset(X_test, Y_test),
+        batch_size=TEST_BATCH_SIZE
+    )
 
     csv_rows = []
     best_models = []
@@ -222,6 +250,7 @@ def main():
 
     for seed in SEEDS:
         set_seed(seed)
+        print(f"\n===== SEED {seed} =====")
 
         model = RegressionTransformer(
             n_tokens=X_train.shape[1],
@@ -234,11 +263,16 @@ def main():
         ).to(DEVICE)
 
         optimizer = torch.optim.AdamW(
-            model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY
+            model.parameters(),
+            lr=LR,
+            weight_decay=WEIGHT_DECAY
         )
 
+        total_steps = EPOCHS * len(train_loader)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=EPOCHS, eta_min=LR * 0.05
+            optimizer,
+            T_max=total_steps,
+            eta_min=LR * 0.05
         )
 
         scaler = torch.amp.GradScaler("cuda", enabled=AMP)
@@ -252,10 +286,16 @@ def main():
             )
             val_rmse, val_mae, val_corr = evaluate(model, val_loader)
 
+            print(
+                f"[Epoch {epoch:03d}] "
+                f"train_loss={train_loss:.5f} "
+                f"val_rmse={val_rmse:.5f} "
+                f"val_mae={val_mae:.5f} "
+                f"val_corr={val_corr:.5f}"
+            )
+
             csv_rows.append([
-                seed, epoch, train_loss,
-                val_rmse, val_mae, val_corr,
-                optimizer.param_groups[0]["lr"]
+                seed, epoch, train_loss, val_rmse, val_mae, val_corr
             ])
 
             if val_corr > best_corr:
@@ -271,45 +311,21 @@ def main():
     # =========================
     with open(LOG_CSV, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow([
-            "seed", "epoch", "train_loss",
-            "val_rmse", "val_mae", "val_corr", "lr"
-        ])
+        writer.writerow(["seed", "epoch", "train_loss", "val_rmse", "val_mae", "val_corr"])
         writer.writerows(csv_rows)
-
-    # =========================
-    # Plot
-    # =========================
-    import pandas as pd
-    df = pd.read_csv(LOG_CSV)
-
-    for col in ["train_loss", "val_rmse", "val_mae", "val_corr"]:
-        plt.figure()
-        for seed in SEEDS:
-            d = df[df.seed == seed]
-            plt.plot(d.epoch, d[col], label=f"seed={seed}")
-        plt.legend()
-        plt.title(col)
-        plt.savefig(OUT_DIR / f"{col}.png")
-        plt.close()
 
     # =========================
     # Ensemble Test
     # =========================
-    print("Ensemble weights (val_corr):", best_corrs)
+    print("\nEnsemble weights (val_corr):", best_corrs)
+    test_rmse, test_mae, test_corr = evaluate_ensemble(best_models, best_corrs, test_loader)
 
-    test_rmse, test_mae, test_corr = evaluate_ensemble(
-        best_models,
-        best_corrs,
-        test_loader
-    )
-
-    print(f"[Weighted Ensemble Test] "
+    print(
+        f"[Weighted Ensemble Test] "
         f"rmse={test_rmse:.6f} "
         f"mae={test_mae:.6f} "
-        f"corr={test_corr:.4f}")
-
-    print(f"[Ensemble Test] rmse={test_rmse:.6f} mae={test_mae:.6f} corr={test_corr:.4f}")
+        f"corr={test_corr:.4f}"
+    )
 
 
 if __name__ == "__main__":
