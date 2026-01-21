@@ -23,7 +23,7 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 AMP = (DEVICE == "cuda")
 
-SEEDS = [42, 43, 44]
+SEEDS = [42, 43, 44, 45, 46, 47, 48, 49, 50, 51]
 
 TRAIN_BATCH_SIZE = 16
 TEST_BATCH_SIZE = 2048
@@ -285,14 +285,6 @@ def main():
                 model, train_loader, optimizer, scaler, scheduler, epoch
             )
             val_rmse, val_mae, val_corr = evaluate(model, val_loader)
-
-            print(
-                f"[Epoch {epoch:03d}] "
-                f"train_loss={train_loss:.5f} "
-                f"val_rmse={val_rmse:.5f} "
-                f"val_mae={val_mae:.5f} "
-                f"val_corr={val_corr:.5f}"
-            )
 
             csv_rows.append([
                 seed, epoch, train_loss, val_rmse, val_mae, val_corr
