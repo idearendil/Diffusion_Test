@@ -132,6 +132,10 @@ def add_features_and_labels(df: pd.DataFrame, ticker: str) -> pd.DataFrame:
 
     # 1) 거래량 = 거래량 * 시가 (원 코드 유지)
     # df[VOLUME_COL] = df[VOLUME_COL] * df[OPEN_COL]
+    df["vol_log"] = np.log(df[VOLUME_COL] * df[OPEN_COL] + 1.0)
+    df["vol_log_ma_5"] = df["vol_log"].rolling(window=5, min_periods=3).mean()
+    df["vol_log_ma_20"] = df["vol_log"].rolling(window=20, min_periods=6).mean()
+    df["vol_log_ma_60"] = df["vol_log"].rolling(window=60, min_periods=20).mean()
     df["vol_ma_5"] = df[VOLUME_COL].rolling(window=5, min_periods=3).mean()
     df["vol_ma_20"] = df[VOLUME_COL].rolling(window=20, min_periods=6).mean()
     df["vol_ma_60"] = df[VOLUME_COL].rolling(window=60, min_periods=20).mean()
