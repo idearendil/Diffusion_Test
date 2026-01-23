@@ -22,7 +22,7 @@ class RegressionTransformer(nn.Module):
         self.feature_proj = nn.Linear(in_dim, d_model)
 
         # 🔥 Stock ID embedding (positional encoding 대체)
-        self.stock_embedding = nn.Embedding(n_tokens, d_model)
+        self.stock_embedding = nn.Embedding(n_tokens, in_dim)
 
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
@@ -40,23 +40,23 @@ class RegressionTransformer(nn.Module):
     def _reset_parameters(self):
         nn.init.normal_(self.stock_embedding.weight, std=0.02)
 
-    def forward(self, x, key_padding_mask=None):
+    def forward(self, x):
         """
         x: [B, N, F]
         """
         B, N, _ = x.shape
         device = x.device
 
+        # stock id embedding
+        stock_ids = torch.arange(N, device=device)
+        stock_emb = self.stock_embedding(stock_ids)[None, :, :]  # [1, N, in_dim]
+
+        x = x + stock_emb
+
         # feature embedding
         h = self.feature_proj(x)  # [B, N, d_model]
 
-        # stock id embedding
-        stock_ids = torch.arange(N, device=device)
-        stock_emb = self.stock_embedding(stock_ids)[None, :, :]  # [1, N, d_model]
-
-        h = h + stock_emb
-
-        h = self.encoder(h, src_key_padding_mask=key_padding_mask)
+        h = self.encoder(h)
 
         out = self.head(h).squeeze(-1)  # [B, N]
         return out

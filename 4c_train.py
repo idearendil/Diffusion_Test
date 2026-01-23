@@ -66,21 +66,18 @@ def token_mask_ratio(epoch, max_epoch,
 def apply_token_mask(x, mask_ratio):
     """
     x: [B, N, F]
-    return:
-        x_masked: masked input
-        token_mask: [B, N] (1 = masked, 0 = keep)
     """
     if mask_ratio <= 0:
-        token_mask = torch.zeros(x.shape[0], x.shape[1], device=x.device)
-        return x, token_mask
+        return x
 
     B, N, F = x.shape
     device = x.device
 
-    token_mask = (torch.rand(B, N, device=device) < mask_ratio).float()
+    mask = torch.rand(B, N, device=device) < mask_ratio
     x = x.clone()
-    x[token_mask.bool()] = 0.0
-    return x, 1.0 - token_mask
+    x[mask] = 0.0
+    return x
+
 
 def weighted_ensemble(preds: List[torch.Tensor], weights: List[float]):
     """
@@ -213,38 +210,21 @@ def train_one_epoch(model, loader, optimizer, scaler, scheduler, epoch):
     for x, y in pbar:
         x = x.to(DEVICE)
         y = y.to(DEVICE)
-
-        # cross-sectional normalization
         y = (y - y.mean(dim=1, keepdim=True)) / (y.std(dim=1, keepdim=True) + 1e-6)
 
-        # 1️⃣ predictable mask (1 = valid)
-        predictable_mask = (x[:, :, 0] != 0).float()  # [B, N]
+        # mask non-predictable
+        predictable_mask = (x[:, :, 0] != 0).float()
 
-        # 2️⃣ token masking
-        x, token_mask = apply_token_mask(x, mask_ratio)  # token_mask: 1 = masked
-
-        # 3️⃣ 결합 mask (attention에 참여 가능한 토큰)
-        # 1 = attendable, 0 = block
-        attendable_mask = predictable_mask * token_mask
-
-        # 4️⃣ key padding mask (True = block)
-        key_padding_mask = (attendable_mask == 0)
+        # 🔥 token masking
+        x = apply_token_mask(x, mask_ratio)
 
         optimizer.zero_grad(set_to_none=True)
 
         with torch.amp.autocast("cuda", enabled=AMP):
-            y_hat = model(
-                x,
-                key_padding_mask=key_padding_mask  # ⭐ 핵심
-            )
-
-            loss_mse = ((y_hat - y).pow(2) * predictable_mask).sum() / (
-                predictable_mask.sum() + 1e-8
-            )
-
+            y_hat = model(x)
+            loss_mse = ((y_hat - y).pow(2) * predictable_mask).sum() / (predictable_mask.sum() + 1e-8)
             loss_corr = corr_loss(y_hat, y, predictable_mask)
             loss_rank = pairwise_rank_loss(y_hat, y, predictable_mask)
-
             loss = 0.5 * loss_mse + 0.5 * loss_corr + 0.0 * loss_rank
             # if epoch < EPOCHS * 0.5:
             #     loss = loss_mse
