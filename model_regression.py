@@ -34,7 +34,8 @@ class RegressionTransformer(nn.Module):
         self.encoder = nn.TransformerEncoder(encoder_layer, n_layers)
 
         self.head = nn.Linear(d_model, 1)
-
+        self.confidence_head = nn.Linear(d_model, 1)
+        
         self._reset_parameters()
 
     def _reset_parameters(self):
@@ -59,4 +60,5 @@ class RegressionTransformer(nn.Module):
         h = self.encoder(h)
 
         out = self.head(h).squeeze(-1)  # [B, N]
-        return out
+        confidence = torch.softmax(self.confidence_head(h).squeeze(-1), dim=1)  # [B, N]
+        return out, confidence

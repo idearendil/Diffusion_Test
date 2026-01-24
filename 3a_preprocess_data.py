@@ -125,7 +125,7 @@ def add_features_and_labels(df: pd.DataFrame, ticker: str) -> pd.DataFrame:
     # 0) 가격 관련 파생
     prev_close = df[CLOSE_COL].shift(1)
     df["gap"] = (df[OPEN_COL] - prev_close) / (prev_close + 1.0)
-    df["high_low_spread"] = np.log((df[HIGH_COL] - df[LOW_COL]) / (df[CLOSE_COL] + 1.0) + 1.0)
+    df["high_low_spread"] = np.log((df[HIGH_COL] - df[LOW_COL]) / (df[CLOSE_COL] + 1.0) + 1e-10)
 
     # refined_data에는 등락률이 없으니 종가 기반으로 생성(%)  -> 원래의 CHANGE_RATE_COL 대체
     df[CHANGE_RATE_COL] = (df[CLOSE_COL] / (df[CLOSE_COL].shift(1) + 1e-12) - 1.0) * 100.0
@@ -171,8 +171,8 @@ def add_features_and_labels(df: pd.DataFrame, ticker: str) -> pd.DataFrame:
         roll_max = df[CLOSE_COL].rolling(window=w, min_periods=minp).max()
         roll_min = df[CLOSE_COL].rolling(window=w, min_periods=minp).min()
         df[f"close_to_ma_{w}"] = df[CLOSE_COL] / (roll_mean + 1.0)
-        df[f"close_to_max_{w}"] = np.log(-(df[CLOSE_COL] / (roll_max + 1.0)) + 2.0)
-        df[f"close_to_min_{w}"] = np.log(df[CLOSE_COL] / (roll_min + 1.0) + 1.0)
+        df[f"close_to_max_{w}"] = np.log(-(df[CLOSE_COL] / (roll_max + 1.0)) + 1.0 + 1e-10)
+        df[f"close_to_min_{w}"] = np.log(df[CLOSE_COL] / (roll_min + 1.0) + 1e-10)
 
     # 모멘텀
     log_close = np.log(df[CLOSE_COL] + 1.0)
@@ -190,16 +190,16 @@ def add_features_and_labels(df: pd.DataFrame, ticker: str) -> pd.DataFrame:
     )
     for w in [5, 14, 20]:
         df[f"atr_{w}"] = tr.rolling(window=w, min_periods=w//2).mean()
-        df[f"atr_ratio_{w}"] = np.log(df[f"atr_{w}"] / (df[CLOSE_COL] + 1.0) + 1.0)
+        df[f"atr_ratio_{w}"] = np.log(df[f"atr_{w}"] / (df[CLOSE_COL] + 1.0) + 1e-10)
 
     # Candle Body Ratio / Upper/Lower Wick Ratio
     body = (df[CLOSE_COL] - df[OPEN_COL]).abs()
     upper_wick = df[HIGH_COL] - np.maximum(df[CLOSE_COL], df[OPEN_COL])
     lower_wick = np.minimum(df[CLOSE_COL], df[OPEN_COL]) - df[LOW_COL]
     range_ = (df[HIGH_COL] - df[LOW_COL]) + 1e-6
-    df["candle_body_ratio"] = np.log(body / range_ + 1.0)
+    df["candle_body_ratio"] = np.log(body / range_ + 1e-10)
     df["upper_wick_ratio"] = np.log(np.clip(upper_wick / range_, 0.0, 10.0) + 1.0)
-    df["lower_wick_ratio"] = np.log(lower_wick / range_ + 1.0)
+    df["lower_wick_ratio"] = np.log(lower_wick / range_ + 1e-10)
     df["bullish"] = (df[CLOSE_COL] > df[OPEN_COL]).astype(np.float32)
 
     # MACD
@@ -225,7 +225,7 @@ def add_features_and_labels(df: pd.DataFrame, ticker: str) -> pd.DataFrame:
     std20 = df[CLOSE_COL].rolling(20, min_periods=10).std()
     df["bb_upper"] = (ma20 + 2 * std20) / (df[CLOSE_COL] + 1.0)
     df["bb_lower"] = (ma20 - 2 * std20) / (df[CLOSE_COL] + 1.0)
-    df["bb_width"] = np.log((2 * std20) / (ma20 + 1.0) + 1.0)
+    df["bb_width"] = np.log((2 * std20) / (ma20 + 1.0) + 1e-10)
 
     # OBV
     direction = np.sign(df[CLOSE_COL].diff()).fillna(0)
