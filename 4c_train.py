@@ -26,8 +26,8 @@ SEEDS = [i for i in range(10)]
 TRAIN_BATCH_SIZE = 16
 TEST_BATCH_SIZE = 2048
 
-CONFI_POS_WEIGHT = 0.1
-CONFI_NEG_WEIGHT = 2.0
+EXP_LOSS_WEIGHT = 1.0
+VAR_LOSS_WEIGHT = 1.0
 EPOCHS = 50
 LR = 2e-4
 WEIGHT_DECAY = 1e-4
@@ -115,73 +115,62 @@ def corr_loss(y_hat, y, confi, eps=1e-8):
 def evaluate(model, loader):
     model.eval()
 
-    total_rmse = total_mae = total_corr = total_confi_rmse = total_confi_mae = total_confi_corr = total_confi_mean = y_hat_confi_variance = y_hat_variance = 0.0
+    total_rmse = total_mae = total_exp = total_var = total_confi_rmse = total_confi_mae = total_confi_exp = total_confi_var = 0.0
     n_batches = 0
 
     for x, y in loader:
         x = x.to(DEVICE)
         y = y.to(DEVICE)
-        y = (y - y.mean(dim=1, keepdim=True)) / (y.std(dim=1, keepdim=True) + 1e-6)
+        # y = (y - y.mean(dim=1, keepdim=True)) / (y.std(dim=1, keepdim=True) + 1e-6)
 
         mask = (x[:, :, 0] != 0).float()
         y_hat, confi = model(x)
         confi *= mask
 
-        _, topk_idx = torch.topk(confi, k=10, dim=1)
+        _, topk_idx = torch.topk(confi, k=3, dim=1)
         clipped_confi = torch.zeros_like(confi)
         clipped_confi.scatter_(1, topk_idx, 1.0)
 
-        # confi 없이 mask만 고려해서 mse, mae, corr 계산
+        # confi 없이 mask만 고려해서 mse, mae, exp, var 계산
         diff = (y_hat - y) * mask
         denom = mask.sum() + 1e-8
 
         rmse = torch.sqrt(diff.pow(2).sum() / denom)
         mae = diff.abs().sum() / denom
-
-        vc = mask.sum(dim=1).clamp_min(1.0)
-        a0 = (y_hat - (y_hat * mask).sum(1, keepdim=True) / vc.unsqueeze(1)) * mask
-        b0 = (y - (y * mask).sum(1, keepdim=True) / vc.unsqueeze(1)) * mask
-
-        corr = ((a0 * b0).sum(1) /  
-                    (torch.sqrt((a0**2).sum(1) * (b0**2).sum(1)) + 1e-8)).mean()
+        exp = (torch.sum((y * mask), dim=1) / denom).mean()
+        var = (torch.sum((y * mask), dim=1) / denom).var()
 
         total_rmse += rmse.item()
         total_mae += mae.item()
-        total_corr += corr.item()
+        total_exp += exp.item()
+        total_var += var.item()
 
-        # confi 적용 후 mse, mae, corr 계산
+        # confi 적용 후 mse, mae, exp, var 계산
         diff = (y_hat - y) * clipped_confi
-        denom = clipped_confi.sum() + 1e-8
+        denom1 = clipped_confi.sum() + 1e-8
+        denom2 = (torch.sum(clipped_confi, dim=1)).mean() + 1e-8
 
-        rmse = torch.sqrt(diff.pow(2).sum() / denom)
-        mae = diff.abs().sum() / denom
-
-        vc = clipped_confi.sum(dim=1).clamp_min(1.0)
-        a0 = (y_hat - (y_hat * clipped_confi).sum(1, keepdim=True) / vc.unsqueeze(1)) * clipped_confi
-        b0 = (y - (y * clipped_confi).sum(1, keepdim=True) / vc.unsqueeze(1)) * clipped_confi
-
-        corr = ((a0 * b0).sum(1) /  
-                    (torch.sqrt((a0**2).sum(1) * (b0**2).sum(1)) + 1e-8)).mean()
+        rmse = torch.sqrt(diff.pow(2).sum() / denom1)
+        mae = diff.abs().sum() / denom1
+        exp = (torch.sum((y * clipped_confi), dim=1) / denom2).mean()
+        var = (torch.sum((y * clipped_confi), dim=1) / denom2).var()
 
         total_confi_rmse += rmse.item()
         total_confi_mae += mae.item()
-        total_confi_corr += corr.item()
+        total_confi_exp += exp.item()
+        total_confi_var += var.item()
 
-        total_confi_mean += confi.mean().item()
-        y_hat_variance += (y_hat ** 2.0).mean().item()
-        y_hat_confi_variance += (((y_hat ** 2.0) * clipped_confi).sum() / (clipped_confi.sum() + 1e-8)).item()
         n_batches += 1
 
     return (
         total_rmse / n_batches,
         total_mae / n_batches,
-        total_corr / n_batches,
+        total_exp / n_batches,
+        total_var / n_batches,
         total_confi_rmse / n_batches,
         total_confi_mae / n_batches,
-        total_confi_corr / n_batches,
-        total_confi_mean / n_batches,
-        y_hat_variance / n_batches,
-        y_hat_confi_variance / n_batches,
+        total_confi_exp / n_batches,
+        total_confi_var / n_batches,
     )
 
 
@@ -193,13 +182,13 @@ def evaluate_ensemble(models, weights, loader):
     for m in models:
         m.eval()
 
-    total_rmse = total_mae = total_corr = total_confi_rmse = total_confi_mae = total_confi_corr = total_confi_mean = y_hat_confi_variance = y_hat_variance = 0.0
+    total_rmse = total_mae = total_exp = total_var = total_confi_rmse = total_confi_mae = total_confi_exp = total_confi_var = 0.0
     n_batches = 0
 
     for x, y in loader:
         x = x.to(DEVICE)
         y = y.to(DEVICE)
-        y = (y - y.mean(dim=1, keepdim=True)) / (y.std(dim=1, keepdim=True) + 1e-6)
+        # y = (y - y.mean(dim=1, keepdim=True)) / (y.std(dim=1, keepdim=True) + 1e-6)
 
         mask = (x[:, :, 0] != 0).float()
 
@@ -207,61 +196,50 @@ def evaluate_ensemble(models, weights, loader):
         y_hat, confi = weighted_ensemble(preds, weights)
         confi *= mask
 
-        _, topk_idx = torch.topk(confi, k=10, dim=1)
+        _, topk_idx = torch.topk(confi, k=3, dim=1)
         clipped_confi = torch.zeros_like(confi)
         clipped_confi.scatter_(1, topk_idx, 1.0)
 
-        # confi 없이 mask만 고려해서 mse, mae, corr 계산
+        # confi 없이 mask만 고려해서 mse, mae, exp, var 계산
         diff = (y_hat - y) * mask
         denom = mask.sum() + 1e-8
 
         rmse = torch.sqrt(diff.pow(2).sum() / denom)
         mae = diff.abs().sum() / denom
-
-        vc = mask.sum(dim=1).clamp_min(1.0)
-        a0 = (y_hat - (y_hat * mask).sum(1, keepdim=True) / vc.unsqueeze(1)) * mask
-        b0 = (y - (y * mask).sum(1, keepdim=True) / vc.unsqueeze(1)) * mask
-
-        corr = ((a0 * b0).sum(1) /  
-                    (torch.sqrt((a0**2).sum(1) * (b0**2).sum(1)) + 1e-8)).mean()
+        exp = (torch.sum((y * mask), dim=1) / denom).mean()
+        var = (torch.sum((y * mask), dim=1) / denom).var()
 
         total_rmse += rmse.item()
         total_mae += mae.item()
-        total_corr += corr.item()
+        total_exp += exp.item()
+        total_var += var.item()
 
-        # confi 적용 후 mse, mae, corr 계산
+        # confi 적용 후 mse, mae, exp, var 계산
         diff = (y_hat - y) * clipped_confi
-        denom = clipped_confi.sum() + 1e-8
+        denom1 = clipped_confi.sum() + 1e-8
+        denom2 = (torch.sum(clipped_confi, dim=1)).mean() + 1e-8
 
-        rmse = torch.sqrt(diff.pow(2).sum() / denom)
-        mae = diff.abs().sum() / denom
-
-        vc = clipped_confi.sum(dim=1).clamp_min(1.0)
-        a0 = (y_hat - (y_hat * clipped_confi).sum(1, keepdim=True) / vc.unsqueeze(1)) * clipped_confi
-        b0 = (y - (y * clipped_confi).sum(1, keepdim=True) / vc.unsqueeze(1)) * clipped_confi
-
-        corr = ((a0 * b0).sum(1) /  
-                    (torch.sqrt((a0**2).sum(1) * (b0**2).sum(1)) + 1e-8)).mean()
+        rmse = torch.sqrt(diff.pow(2).sum() / denom1)
+        mae = diff.abs().sum() / denom1
+        exp = (torch.sum((y * clipped_confi), dim=1) / denom2).mean()
+        var = (torch.sum((y * clipped_confi), dim=1) / denom2).var()
 
         total_confi_rmse += rmse.item()
         total_confi_mae += mae.item()
-        total_confi_corr += corr.item()
+        total_confi_exp += exp.item()
+        total_confi_var += var.item()
 
-        total_confi_mean += confi.mean().item()
-        y_hat_variance += (y_hat ** 2.0).mean().item()
-        y_hat_confi_variance += (((y_hat ** 2.0) * clipped_confi).sum() / (clipped_confi.sum() + 1e-8)).item()
         n_batches += 1
 
     return (
         total_rmse / n_batches,
         total_mae / n_batches,
-        total_corr / n_batches,
+        total_exp / n_batches,
+        total_var / n_batches,
         total_confi_rmse / n_batches,
         total_confi_mae / n_batches,
-        total_confi_corr / n_batches,
-        total_confi_mean / n_batches,
-        y_hat_variance / n_batches,
-        y_hat_confi_variance / n_batches,
+        total_confi_exp / n_batches,
+        total_confi_var / n_batches,
     )
 
 
@@ -279,7 +257,7 @@ def train_one_epoch(model, loader, optimizer, scaler, scheduler, epoch):
     for x, y in pbar:
         x = x.to(DEVICE)
         y = y.to(DEVICE)
-        y = (y - y.mean(dim=1, keepdim=True)) / (y.std(dim=1, keepdim=True) + 1e-6)
+        # y = (y - y.mean(dim=1, keepdim=True)) / (y.std(dim=1, keepdim=True) + 1e-6)
 
         # mask non-predictable
         predictable_mask = (x[:, :, 0] != 0).float()
@@ -292,16 +270,13 @@ def train_one_epoch(model, loader, optimizer, scaler, scheduler, epoch):
         with torch.amp.autocast("cuda", enabled=AMP):
             y_hat, confi = model(x)
             masked_confi = confi * predictable_mask
+            masked_confi = masked_confi / masked_confi.sum(dim=1, keepdim=True)
 
             loss_mse = ((y_hat - y).pow(2) * predictable_mask).sum() / (predictable_mask.sum() + 1e-8)
-            loss_confi_corr = corr_loss(y_hat.detach(), y, masked_confi)
-            loss_confi_var = ((y_hat.detach() ** 2.0) * masked_confi).sum() / (masked_confi.sum() + 1e-8)
-            loss = 0.5 * loss_mse + 0.5 * loss_confi_corr - loss_confi_var
-            # if epoch < EPOCHS * 0.5:
-            #     loss = loss_mse
-            # else:
-            #     alpha = (epoch - EPOCHS*0.5) / (EPOCHS*0.5)
-            #     loss = (1 - alpha) * loss_mse + alpha * loss_corr
+            loss_exp = torch.sum((y * masked_confi), dim=1).mean()
+            loss_var = torch.sum((y * masked_confi), dim=1).var()
+
+            loss = loss_mse * 0.0 - loss_exp * EXP_LOSS_WEIGHT + loss_var * VAR_LOSS_WEIGHT
 
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
@@ -366,47 +341,42 @@ def main():
 
         scaler = torch.amp.GradScaler("cuda", enabled=AMP)
 
-        best_confi_corr = -1.0
-        best_confi_mean = -1.0
-        best_y_hat_variance = -1.0
-        best_y_hat_confi_variance = -1.0
+        best_confi_exp = -1.0
+        best_confi_var = -1.0
         ckpt_path = OUT_DIR / f"best_model_seed{seed}.pt"
 
         for epoch in range(1, EPOCHS + 1):
             train_loss = train_one_epoch(
                 model, train_loader, optimizer, scaler, scheduler, epoch
             )
-            val_rmse, val_mae, val_corr, val_confi_rmse, val_confi_mae, val_confi_corr, val_confi_mean, val_y_hat_variance, val_y_hat_confi_variance = evaluate(model, val_loader)
+            val_rmse, val_mae, val_exp, val_var, val_confi_rmse, val_confi_mae, val_confi_exp, val_confi_var = evaluate(model, val_loader)
             # print(f"val_rmse={val_rmse:.4f} " 
-            #       f"val_mae={val_mae:.4f} " 
-            #       f"val_corr={val_corr:.4f} " 
+            #       f"val_mae={val_mae:.4f} "
+            #       f"val_exp={val_exp:.4f} "
+            #       f"val_var={val_var:.4f} "
             #       f"val_confi_rmse={val_confi_rmse:.4f} " 
-            #       f"val_confi_mae={val_confi_mae:.4f} " 
-            #       f"val_confi_corr={val_confi_corr:.4f} " 
-            #       f"val_confi_mean={val_confi_mean:.4f} " 
-            #       f"val_y_hat_variance={val_y_hat_variance:.4f} "
-            #       f"val_y_hat_confi_variance={val_y_hat_confi_variance:.6f}")
+            #       f"val_confi_mae={val_confi_mae:.4f} "
+            #       f"val_confi_exp={val_confi_exp:.4f} "
+            #       f"val_confi_var={val_confi_var:.4f} ")
 
             csv_rows.append([
                 seed, epoch, train_loss,
-                val_rmse, val_mae, val_corr,
-                val_confi_rmse, val_confi_mae, val_confi_corr,
-                val_confi_mean, val_y_hat_variance, val_y_hat_confi_variance,
+                val_rmse, val_mae, val_exp, val_var,
+                val_confi_rmse, val_confi_mae, val_confi_exp, val_confi_var,
                 optimizer.param_groups[0]["lr"]
             ])
 
-            if val_confi_corr + val_y_hat_confi_variance > best_confi_corr + best_y_hat_confi_variance:
-                best_confi_corr = val_confi_corr
-                best_confi_mean = val_confi_mean
-                best_y_hat_variance = val_y_hat_variance
-                best_y_hat_confi_variance = val_y_hat_confi_variance
+            if val_confi_exp * EXP_LOSS_WEIGHT + val_confi_var * VAR_LOSS_WEIGHT \
+                  > best_confi_exp * EXP_LOSS_WEIGHT + best_confi_var * VAR_LOSS_WEIGHT:
+                best_confi_exp = val_confi_exp
+                best_confi_var = val_confi_var
                 torch.save(model.state_dict(), ckpt_path)
                 # print(f"Saved best model to {ckpt_path} with val_confi_corr={val_confi_corr} and val_y_hat_confi_variance={val_y_hat_confi_variance}")
 
         model.load_state_dict(torch.load(ckpt_path))
         best_models.append(model)
-        best_corrs.append(best_confi_corr + best_y_hat_confi_variance)
-        print(f"seed={seed} best_confi_corr={best_confi_corr} best_confi_mean={best_confi_mean} best_y_hat_variance={best_y_hat_variance} best_y_hat_confi_variance={best_y_hat_confi_variance}")
+        best_corrs.append(best_confi_exp * EXP_LOSS_WEIGHT + best_confi_var * VAR_LOSS_WEIGHT)
+        print(f"seed={seed} best_confi_exp={best_confi_exp} best_confi_var={best_confi_var}")
 
     # =========================
     # Save CSV
@@ -415,9 +385,8 @@ def main():
         writer = csv.writer(f)
         writer.writerow([
             "seed", "epoch", "train_loss",
-            "val_rmse", "val_mae", "val_corr",
-            "val_confi_rmse", "val_confi_mae", "val_confi_corr",
-            "val_confi_mean", "val_y_hat_variance", "val_y_hat_confi_variance", "lr"
+            "val_rmse", "val_mae", "val_exp", "val_var",
+            "val_confi_rmse", "val_confi_mae", "val_confi_exp", "val_confi_var", "lr"
         ])
         writer.writerows(csv_rows)
 
@@ -427,7 +396,7 @@ def main():
     import pandas as pd
     df = pd.read_csv(LOG_CSV)
 
-    for col in ["train_loss", "val_rmse", "val_mae", "val_corr", "val_confi_mean", "val_y_hat_variance"]:
+    for col in ["train_loss", "val_rmse", "val_mae", "val_exp", "val_var", "val_confi_rmse", "val_confi_mae", "val_confi_exp", "val_confi_var"]:
         plt.figure()
         for seed in SEEDS:
             d = df[df.seed == seed]
@@ -442,7 +411,7 @@ def main():
     # =========================
     print("Ensemble weights (val_corr):", best_corrs)
 
-    test_rmse, test_mae, test_corr, test_confi_rmse, test_confi_mae, test_confi_corr, test_confi_mean, test_y_hat_variance, test_y_hat_confi_variance = evaluate_ensemble(
+    test_rmse, test_mae, test_exp, test_var, test_confi_rmse, test_confi_mae, test_confi_exp, test_confi_var = evaluate_ensemble(
         best_models,
         best_corrs,
         test_loader
@@ -451,13 +420,12 @@ def main():
     print(f"[Weighted Ensemble Test] "
         f"rmse={test_rmse:.6f} "
         f"mae={test_mae:.6f} "
-        f"corr={test_corr:.4f} "
+        f"exp={test_exp:.6f} "
+        f"var={test_var:.6f} "
         f"confi_rmse={test_confi_rmse:.4f} "
         f"confi_mae={test_confi_mae:.4f} "
-        f"confi_corr={test_confi_corr:.4f} "
-        f"confi_mean={test_confi_mean:.4f} "
-        f"y_hat_variance={test_y_hat_variance:.4f} "
-        f"y_hat_confi_variance={test_y_hat_confi_variance:.4f}")
+        f"confi_exp={test_confi_exp:.4f} "
+        f"confi_var={test_confi_var:.4f} ")
 
 if __name__ == "__main__":
     main()
