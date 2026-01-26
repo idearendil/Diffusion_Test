@@ -1,1 +1,6 @@
 backtest/
+diffusion_runs/
+final_regression_runs/
+raw_data/
+refined_data/
+tensor_data/
