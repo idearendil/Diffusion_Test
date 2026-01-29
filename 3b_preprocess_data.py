@@ -23,7 +23,7 @@ VOLUME_COL = "거래량"
 LABEL_COL = "label1"
 CHANGE_RATE_COL = "ret_pct"  # 종가 기준 일간 수익률(%)
 
-TEST_START = pd.Timestamp("2017-03-01")
+TEST_START = pd.Timestamp("2020-01-01")
 TEST_END   = pd.Timestamp("2025-12-31")
 
 
@@ -52,6 +52,7 @@ def clip_features(df: pd.DataFrame) -> pd.DataFrame:
     """(label, vol_* 제외) feature를 -10~10 클리핑"""
     df = df.copy()
     feature_cols = [c for c in df.columns if c != LABEL_COL and c != DATE_COL]
+    feature_cols = [c for c in feature_cols if c != "day_of_week" and c != "day_of_month"]
     clip_cols = [c for c in feature_cols if not is_volume_related(c)]
     if clip_cols:
         df[clip_cols] = df[clip_cols].clip(-10.0, 10.0)
@@ -86,17 +87,20 @@ def save_tensors(df: pd.DataFrame, feature_cols: List[str], out_dir: Path, ticke
 # Feature / Label
 # =========================
 def add_features_and_labels(df: pd.DataFrame, ticker: str) -> pd.DataFrame:
+    """단일 종목(df)에 대해 feature / label 생성."""
     df = df.copy()
     df = df.sort_values(DATE_COL)
 
-    # (추가) dom/dow 순환 인코딩
-    dom = df[DATE_COL].dt.day.astype(np.float32)
-    dim = df[DATE_COL].dt.days_in_month.astype(np.float32)
-    dom_phase = 2.0 * np.pi * (dom - 1.0) / dim
+    # day_of_month: 1~31 (월마다 일수가 다르므로 "해당 월의 일수"로 스케일링하는 게 보통 더 좋음)
+    dom = df[DATE_COL].dt.day.astype(np.float32)                  # 1..31
+    dim = df[DATE_COL].dt.days_in_month.astype(np.float32)        # 28..31
+
+    dom_phase = 2.0 * np.pi * (dom - 1.0) / dim                   # 0..2pi
     df["dom_sin"] = np.sin(dom_phase)
     df["dom_cos"] = np.cos(dom_phase)
 
-    dow = df[DATE_COL].dt.dayofweek.astype(np.float32)  # 0..6
+    # day_of_week: pandas dayofweek = 0(Mon) .. 6(Sun)
+    dow = df[DATE_COL].dt.dayofweek.astype(np.float32)            # 0..6
     dow_phase = 2.0 * np.pi * dow / 7.0
     df["dow_sin"] = np.sin(dow_phase)
     df["dow_cos"] = np.cos(dow_phase)
@@ -104,62 +108,125 @@ def add_features_and_labels(df: pd.DataFrame, ticker: str) -> pd.DataFrame:
     # 0) 가격 관련 파생
     prev_close = df[CLOSE_COL].shift(1)
     df["gap"] = (df[OPEN_COL] - prev_close) / (prev_close + 1.0)
-    df["high_low_spread"] = (df[HIGH_COL] - df[LOW_COL]) / (df[CLOSE_COL] + 1.0)
+    df["high_low_spread"] = np.log((df[HIGH_COL] - df[LOW_COL]) / (df[CLOSE_COL] + 1.0) + 1e-10)
 
-    # 종가 기반 일간 수익률(%)
+    # refined_data에는 등락률이 없으니 종가 기반으로 생성(%)  -> 원래의 CHANGE_RATE_COL 대체
     df[CHANGE_RATE_COL] = (df[CLOSE_COL] / (df[CLOSE_COL].shift(1) + 1e-12) - 1.0) * 100.0
 
-    # 거래량 파생
+    # 1) 거래량 = 거래량 * 시가 (원 코드 유지)
+    # df[VOLUME_COL] = df[VOLUME_COL] * df[OPEN_COL]
+    df["vol_log"] = np.log(df[VOLUME_COL] * df[OPEN_COL] + 1.0)
+    df["vol_log_ma_5"] = df["vol_log"].rolling(window=5, min_periods=3).mean()
+    df["vol_log_ma_20"] = df["vol_log"].rolling(window=20, min_periods=6).mean()
+    df["vol_log_ma_60"] = df["vol_log"].rolling(window=60, min_periods=20).mean()
     df["vol_ma_5"] = df[VOLUME_COL].rolling(window=5, min_periods=3).mean()
     df["vol_ma_20"] = df[VOLUME_COL].rolling(window=20, min_periods=6).mean()
     df["vol_ma_60"] = df[VOLUME_COL].rolling(window=60, min_periods=20).mean()
-    df["vol_ratio_5"] = df[VOLUME_COL] / (df["vol_ma_5"] + 1.0)
-    df["vol_ratio_20"] = df[VOLUME_COL] / (df["vol_ma_20"] + 1.0)
-    df["vol_ratio_60"] = df[VOLUME_COL] / (df["vol_ma_60"] + 1.0)
+    df["vol_ratio_5"] = np.log(df[VOLUME_COL] / (df["vol_ma_5"] + 1.0) + 1.0)
+    df["vol_ratio_20"] = np.log(df[VOLUME_COL] / (df["vol_ma_20"] + 1.0) + 1.0)
+    df["vol_ratio_60"] = np.log(df[VOLUME_COL] / (df["vol_ma_60"] + 1.0) + 1.0)
     df["vol_diff"] = df[VOLUME_COL] / (df[VOLUME_COL].shift(1) + 1.0)
-    df["vol_diff"] = np.clip(df["vol_diff"].values, 0.0, 10.0)
+    df["vol_diff"] = np.log(np.clip(df["vol_diff"].values, 0.0, 10.0) + 1.0)
     df["vol_diff_ma_5"] = df["vol_diff"].diff().rolling(window=5, min_periods=3).mean()
     df["vol_diff_ma_20"] = df["vol_diff"].diff().rolling(window=20, min_periods=6).mean()
     df["vol_diff_ma_60"] = df["vol_diff"].diff().rolling(window=60, min_periods=20).mean()
 
-    # 과거 수익률 평균/변동성
+    # 8) 과거 수익률 기반 평균/변동성
     for w in [5, 10, 20, 60]:
         minp = max(3, w // 3)
         df[f"ret_mean_{w}"] = df[CHANGE_RATE_COL].rolling(window=w, min_periods=minp).mean()
-        df[f"ret_std_{w}"] = df[CHANGE_RATE_COL].rolling(window=w, min_periods=minp).std()
+        df[f"ret_std_{w}"] = np.log(df[CHANGE_RATE_COL].rolling(window=w, min_periods=minp).std() + 1.0)
 
     df[CHANGE_RATE_COL + "_2"] = df[CHANGE_RATE_COL].shift(1)
     df[CHANGE_RATE_COL + "_3"] = df[CHANGE_RATE_COL].shift(2)
     df[CHANGE_RATE_COL + "_4"] = df[CHANGE_RATE_COL].shift(3)
     df[CHANGE_RATE_COL + "_5"] = df[CHANGE_RATE_COL].shift(4)
 
-    # 갭 평균
+    # 9) 갭의 N일 평균
     for w in [5, 10, 20]:
         minp = max(3, w // 3)
         df[f"gap_mean_{w}"] = df["gap"].rolling(window=w, min_periods=minp).mean()
 
-    # 가격 레벨 대비
+    # 10) 가격 레벨 장단기 평균/최고/최저 대비
     for w in [5, 20, 60]:
         minp = max(3, w // 3)
         roll_mean = df[CLOSE_COL].rolling(window=w, min_periods=minp).mean()
         roll_max = df[CLOSE_COL].rolling(window=w, min_periods=minp).max()
         roll_min = df[CLOSE_COL].rolling(window=w, min_periods=minp).min()
         df[f"close_to_ma_{w}"] = df[CLOSE_COL] / (roll_mean + 1.0)
-        df[f"close_to_max_{w}"] = df[CLOSE_COL] / (roll_max + 1.0)
-        df[f"close_to_min_{w}"] = df[CLOSE_COL] / (roll_min + 1.0)
+        df[f"close_to_max_{w}"] = np.log(-(df[CLOSE_COL] / (roll_max + 1.0)) + 1.0 + 1e-10)
+        df[f"close_to_min_{w}"] = np.log(df[CLOSE_COL] / (roll_min + 1.0) + 1e-10)
 
     # 모멘텀
     log_close = np.log(df[CLOSE_COL] + 1.0)
     df["mom_5"] = log_close - log_close.shift(5)
     df["mom_20"] = log_close - log_close.shift(20)
 
+    # True Range
+    prev_close = df[CLOSE_COL].shift(1)
+    tr = np.maximum(
+        df[HIGH_COL] - df[LOW_COL],
+        np.maximum(
+            (df[HIGH_COL] - prev_close).abs(),
+            (df[LOW_COL] - prev_close).abs()
+        )
+    )
+    for w in [5, 14, 20]:
+        df[f"atr_{w}"] = tr.rolling(window=w, min_periods=w//2).mean()
+        df[f"atr_ratio_{w}"] = np.log(df[f"atr_{w}"] / (df[CLOSE_COL] + 1.0) + 1e-10)
+
+    # Candle Body Ratio / Upper/Lower Wick Ratio
+    body = (df[CLOSE_COL] - df[OPEN_COL]).abs()
+    upper_wick = df[HIGH_COL] - np.maximum(df[CLOSE_COL], df[OPEN_COL])
+    lower_wick = np.minimum(df[CLOSE_COL], df[OPEN_COL]) - df[LOW_COL]
+    range_ = (df[HIGH_COL] - df[LOW_COL]) + 1e-6
+    df["candle_body_ratio"] = np.log(body / range_ + 1e-10)
+    df["upper_wick_ratio"] = np.log(np.clip(upper_wick / range_, 0.0, 10.0) + 1.0)
+    df["lower_wick_ratio"] = np.log(lower_wick / range_ + 1e-10)
+    df["bullish"] = (df[CLOSE_COL] > df[OPEN_COL]).astype(np.float32)
+
+    # MACD
+    def ema(series, span):
+        return series.ewm(span=span, adjust=False).mean()
+    ema12 = ema(df[CLOSE_COL], 12)
+    ema26 = ema(df[CLOSE_COL], 26)
+    df["macd"] = ema12 - ema26
+    df["macd_signal"] = ema(df["macd"], 9)
+    df["macd_hist"] = df["macd"] - df["macd_signal"]
+
+    # RSI
+    delta = df[CLOSE_COL].diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.rolling(14, min_periods=7).mean()
+    avg_loss = loss.rolling(14, min_periods=7).mean()
+    rs = avg_gain / (avg_loss + 1e-6)
+    df["rsi_14"] = 100 - (100 / (1 + rs))
+
+    # Bollinger Bands
+    ma20 = df[CLOSE_COL].rolling(20, min_periods=10).mean()
+    std20 = df[CLOSE_COL].rolling(20, min_periods=10).std()
+    df["bb_upper"] = (ma20 + 2 * std20) / (df[CLOSE_COL] + 1.0)
+    df["bb_lower"] = (ma20 - 2 * std20) / (df[CLOSE_COL] + 1.0)
+    df["bb_width"] = np.log((2 * std20) / (ma20 + 1.0) + 1e-10)
+
+    # OBV
+    direction = np.sign(df[CLOSE_COL].diff()).fillna(0)
+    df["obv"] = (direction * df[VOLUME_COL]).cumsum()
+    df["obv_ma_20"] = df["obv"].rolling(20, min_periods=10).mean()
+
+    # VPT
+    df["vpt"] = ((df[CLOSE_COL] - df[CLOSE_COL].shift(1)) /
+             (df[CLOSE_COL].shift(1) + 1e-6) * df[VOLUME_COL]).cumsum()
+
     # ===== Label =====
-    # 다음날 종가 상승률 * 10
     df[LABEL_COL] = (df[CLOSE_COL].shift(-1) / df[CLOSE_COL] - 1) * 10.0
+    df[LABEL_COL] = (df[LABEL_COL] - np.mean(df[LABEL_COL])) / np.std(df[LABEL_COL])
 
+    # 다음날 없는 마지막 행 + 이전 행들이 적은 첫 부분 행들 제거
     df = df.dropna()
-    return df
 
+    return df
 
 def prepare_full_dfs() -> Tuple[Dict[str, pd.DataFrame], List[str]]:
     """
@@ -257,7 +324,7 @@ def build_monthly_backtest_datasets():
         train_all = pd.concat(list(train_dfs.values()), ignore_index=True)
 
         # label clip
-        train_all[LABEL_COL] = np.clip(train_all[LABEL_COL].values, -3.0, 3.0)
+        train_all[LABEL_COL] = np.clip(train_all[LABEL_COL].values, -10.0, 10.0)
 
         feat_mean = train_all[feature_cols].mean()
         feat_std = train_all[feature_cols].std(ddof=0).replace(0.0, 1.0)

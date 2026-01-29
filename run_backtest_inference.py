@@ -1,0 +1,159 @@
+import torch
+import pandas as pd
+from pathlib import Path
+from tqdm import tqdm
+import calendar
+
+from utils import list_tickers
+from model_regression import RegressionTransformer   # ← 네가 말한 모델
+
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
+# =========================
+# Paths
+# =========================
+BASE_DIR = Path("backtest")
+TENSOR_ROOT = BASE_DIR / "tensor_data"
+MODEL_ROOT  = BASE_DIR / "regression_runs"
+OUT_ROOT    = BASE_DIR / "inference_results"
+REFINED_DIR = Path("refined_data")
+
+OUT_ROOT.mkdir(parents=True, exist_ok=True)
+
+SEEDS = list(range(10))
+
+
+# =========================
+# Load trading days
+# =========================
+def load_trading_days(start_date: str, end_date: str):
+    start_date = pd.to_datetime(start_date)
+    end_date = pd.to_datetime(end_date)
+    ref = pd.read_csv(REFINED_DIR / "000020.csv")
+    ref["날짜"] = pd.to_datetime(ref["날짜"])
+    mask = (ref["날짜"] >= start_date) & (ref["날짜"] <= end_date)
+    return ref.loc[mask, "날짜"].dt.strftime("%Y-%m-%d").tolist()
+
+
+# =========================
+# Load test tensors (concat tickers)
+# =========================
+def load_test_tensor(split_dir: Path, tickers):
+    x_list = []
+
+    for tkr in tickers:
+        x_path = split_dir / f"{tkr}_x.pt"
+        if not x_path.exists():
+            raise FileNotFoundError(f"Missing x tensor: {tkr}")
+
+        x = torch.load(x_path, map_location="cpu")  # [T, F]
+        if x.ndim != 2:
+            raise ValueError(f"{tkr}: bad x shape {x.shape}")
+
+        x_list.append(x.float())
+
+    # [N, T, F] → [T, N, F]
+    X = torch.stack(x_list, dim=0).transpose(0, 1).contiguous()
+    return X
+
+
+# =========================
+# Inference (ensemble mean)
+# =========================
+@torch.no_grad()
+def run_ensemble(models, X):
+    preds = []
+
+    for model in models:
+        model.eval()
+        _, y_hat = model(X)   # [T, N]
+        preds.append(y_hat)
+
+    return torch.stack(preds).mean(dim=0)  # [T, N]
+
+
+# =========================
+# Main
+# =========================
+def main():
+    date_dirs = sorted([d for d in TENSOR_ROOT.iterdir() if d.is_dir()])
+
+    for date_dir in date_dirs:
+        date = date_dir.name
+        print(f"\n===== Inference {date} =====")
+
+        out_csv = OUT_ROOT / f"{date}.csv"
+        if out_csv.exists():
+            print(f"[SKIP] {date} already inferred")
+            continue
+
+        test_dir = date_dir / "test"
+        model_dir = MODEL_ROOT / date
+
+        tickers = list_tickers(test_dir)
+        tickers.sort()
+
+        # -------------------------
+        # Load tensors
+        # -------------------------
+        X = load_test_tensor(test_dir, tickers)
+        T, N, F = X.shape
+        X = X.to(DEVICE)
+
+        # -------------------------
+        # Load models
+        # -------------------------
+        models = []
+        for seed in SEEDS:
+            ckpt = model_dir / f"best_model_seed{seed}.pt"
+            if not ckpt.exists():
+                raise FileNotFoundError(f"Missing model: {ckpt}")
+
+            model = RegressionTransformer(
+                n_tokens=N,
+                in_dim=F,
+                d_model=128,
+                n_head=8,
+                n_layers=3,
+                d_ff=256,
+                dropout=0.1,
+            ).to(DEVICE)
+
+            model.load_state_dict(torch.load(ckpt, map_location=DEVICE))
+            models.append(model)
+
+        # -------------------------
+        # Inference
+        # -------------------------
+        Y_hat = run_ensemble(models, X)  # [T, N]
+        Y_hat = Y_hat.cpu().numpy()
+
+        # -------------------------
+        # Trading days
+        # -------------------------
+        year  = int(date[:4])
+        month = int(date[5:7])
+        last_day = calendar.monthrange(year, month)[1]
+        start = f"{year:04d}-{month:02d}-01"
+        end   = f"{year:04d}-{month:02d}-{last_day:02d}"
+        trading_days = load_trading_days(start, end)
+        if year == 2025 and month == 12:
+            trading_days = trading_days[:-1]
+
+        if len(trading_days) != T:
+            raise ValueError(
+                f"{date}: trading_days({len(trading_days)}) != T({T})"
+            )
+
+        # -------------------------
+        # Save CSV
+        # -------------------------
+        df = pd.DataFrame(Y_hat, index=trading_days, columns=tickers)
+        df.index.name = "date"
+        df.to_csv(out_csv)
+
+        print(f"[OK] saved → {out_csv}")
+
+
+if __name__ == "__main__":
+    main()

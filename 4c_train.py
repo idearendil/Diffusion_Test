@@ -366,8 +366,8 @@ def main():
                 optimizer.param_groups[0]["lr"]
             ])
 
-            if val_confi_exp * EXP_LOSS_WEIGHT + val_confi_var * VAR_LOSS_WEIGHT \
-                  > best_confi_exp * EXP_LOSS_WEIGHT + best_confi_var * VAR_LOSS_WEIGHT:
+            if val_confi_exp * EXP_LOSS_WEIGHT - val_confi_var * VAR_LOSS_WEIGHT \
+                  > best_confi_exp * EXP_LOSS_WEIGHT - best_confi_var * VAR_LOSS_WEIGHT:
                 best_confi_exp = val_confi_exp
                 best_confi_var = val_confi_var
                 torch.save(model.state_dict(), ckpt_path)
@@ -375,7 +375,7 @@ def main():
 
         model.load_state_dict(torch.load(ckpt_path))
         best_models.append(model)
-        best_corrs.append(best_confi_exp * EXP_LOSS_WEIGHT + best_confi_var * VAR_LOSS_WEIGHT)
+        best_corrs.append(best_confi_exp * EXP_LOSS_WEIGHT - best_confi_var * VAR_LOSS_WEIGHT)
         print(f"seed={seed} best_confi_exp={best_confi_exp} best_confi_var={best_confi_var}")
 
     # =========================
