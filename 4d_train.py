@@ -26,7 +26,7 @@ TRAIN_BATCH_SIZE = 16
 TEST_BATCH_SIZE = 2048
 
 EXP_LOSS_WEIGHT = 1.0
-VAR_LOSS_WEIGHT = 1.0
+VAR_LOSS_WEIGHT = 0.0
 EPOCHS = 50
 LR = 2e-4
 WEIGHT_DECAY = 1e-4
@@ -38,7 +38,7 @@ AMP = (DEVICE == "cuda")
 # Utils
 # =========================
 def token_mask_ratio(epoch, max_epoch,
-                     start=0.6, end=0.0, end_ratio=0.2):
+                     start=0.8, end=0.8, end_ratio=0.0):
     real_max_epoch = max_epoch - int(end_ratio * max_epoch)
     if epoch <= real_max_epoch:
         alpha = epoch / real_max_epoch
@@ -75,7 +75,7 @@ def weighted_ensemble(preds: List[torch.Tensor], weights: List[float]):
 def evaluate(model, loader):
     model.eval()
 
-    totals = [0.0] * 8
+    totals = [0.0] * 9
     n_batches = 0
 
     for x, y in loader:
@@ -83,6 +83,20 @@ def evaluate(model, loader):
         mask = (x[:, :, 0] != 0).float()
 
         y_hat, confi = model(x)
+
+        # evaluate training loss
+        masked_confi = confi * mask
+        masked_confi = masked_confi / masked_confi.sum(dim=1, keepdim=True)
+
+        loss_exp = torch.sum(y * masked_confi, dim=1).mean()
+        loss_var = torch.sum(y * masked_confi, dim=1).var()
+
+        loss = -loss_exp * EXP_LOSS_WEIGHT + loss_var * VAR_LOSS_WEIGHT
+        totals[8] += loss.item()
+        totals[2] += loss_exp.item()
+        totals[3] += loss_var.item()
+
+        # evaluate complimental curves
         confi *= mask
 
         _, topk = torch.topk(confi, k=3, dim=1)
@@ -95,13 +109,9 @@ def evaluate(model, loader):
 
         rmse = torch.sqrt(diff.pow(2).sum() / denom)
         mae  = diff.abs().sum() / denom
-        exp  = (torch.sum(y * mask, dim=1) / denom).mean()
-        var  = (torch.sum(y * mask, dim=1) / denom).var()
 
         totals[0] += rmse.item()
         totals[1] += mae.item()
-        totals[2] += exp.item()
-        totals[3] += var.item()
 
         # confi
         diff = (y_hat - y) * clipped
@@ -128,7 +138,7 @@ def evaluate_ensemble(models, weights, loader):
     for m in models:
         m.eval()
 
-    totals = [0.0] * 8
+    totals = [0.0] * 9
     n_batches = 0
 
     for x, y in loader:
@@ -137,6 +147,20 @@ def evaluate_ensemble(models, weights, loader):
 
         preds = [torch.stack(m(x)) for m in models]
         y_hat, confi = weighted_ensemble(preds, weights)
+
+        # evaluate training loss
+        masked_confi = confi * mask
+        masked_confi = masked_confi / (masked_confi.sum(dim=1, keepdim=True) + 1e-8)
+
+        loss_exp = torch.sum(y * masked_confi, dim=1).mean()
+        loss_var = torch.sum(y * masked_confi, dim=1).var()
+
+        loss = -loss_exp * EXP_LOSS_WEIGHT + loss_var * VAR_LOSS_WEIGHT
+        totals[8] += loss.item()
+        totals[2] += loss_exp.item()
+        totals[3] += loss_var.item()
+
+        # evaluate complimental curves
         confi *= mask
 
         _, topk = torch.topk(confi, k=3, dim=1)
@@ -153,8 +177,6 @@ def evaluate_ensemble(models, weights, loader):
 
         totals[0] += rmse.item()
         totals[1] += mae.item()
-        totals[2] += exp.item()
-        totals[3] += var.item()
 
         diff = (y_hat - y) * clipped
         denom1 = clipped.sum() + 1e-8
@@ -224,7 +246,7 @@ def train_one_epoch(model, loader, optimizer, scaler, scheduler, epoch):
 def main():
     date_dirs = sorted([d for d in BASE_DATA_ROOT.iterdir() if d.is_dir()])
 
-    for date_dir in date_dirs:
+    for date_dir in date_dirs[-1:]:
         date = date_dir.name
 
         DATA_ROOT = date_dir
@@ -277,7 +299,7 @@ def main():
             )
             scaler = torch.amp.GradScaler("cuda", enabled=AMP)
 
-            best_score = -1e9
+            best_score = 1e9
             ckpt = OUT_DIR / f"best_model_seed{seed}.pt"
 
             for epoch in range(1, EPOCHS + 1):
@@ -286,14 +308,13 @@ def main():
 
                 csv_rows.append([seed, epoch, train_loss, *vals, optimizer.param_groups[0]["lr"]])
 
-                score = vals[6] * EXP_LOSS_WEIGHT - vals[7] * VAR_LOSS_WEIGHT * 0.0
-                if score > best_score:
-                    best_score = score
+                if vals[8] < best_score and epoch > 30:
+                    best_score = vals[8]
                     torch.save(model.state_dict(), ckpt)
 
             model.load_state_dict(torch.load(ckpt))
             best_models.append(model)
-            best_scores.append(best_score)
+            best_scores.append(-best_score)
 
         with open(LOG_CSV, "w", newline="") as f:
             writer = csv.writer(f)
@@ -301,7 +322,7 @@ def main():
                 "seed", "epoch", "train_loss",
                 "val_rmse", "val_mae", "val_exp", "val_var",
                 "val_confi_rmse", "val_confi_mae", "val_confi_exp", "val_confi_var",
-                "lr"
+                "val_loss", "lr"
             ])
             writer.writerows(csv_rows)
 
@@ -311,7 +332,7 @@ def main():
         import pandas as pd
         df = pd.read_csv(LOG_CSV)
 
-        for col in ["train_loss", "val_rmse", "val_mae", "val_exp", "val_var", "val_confi_rmse", "val_confi_mae", "val_confi_exp", "val_confi_var"]:
+        for col in ["train_loss", "val_rmse", "val_mae", "val_exp", "val_var", "val_confi_rmse", "val_confi_mae", "val_confi_exp", "val_confi_var", "val_loss"]:
             plt.figure()
             for seed in SEEDS:
                 d = df[df.seed == seed]
@@ -323,6 +344,14 @@ def main():
 
         test_vals = evaluate_ensemble(best_models, best_scores, test_loader)
         print(f"[{date} Ensemble Test]", test_vals)
+
+        # 🔥 GPU 메모리 정리
+        for m in best_models:
+            del m
+        best_models.clear()
+        best_scores.clear()
+
+        torch.cuda.empty_cache()
 
 
 if __name__ == "__main__":

@@ -112,12 +112,13 @@ def main():
     # =========================
     plt.figure(figsize=(10, 6))
     plt.plot(equity_df.index, equity_df["equity"])
-    plt.title("Backtest Equity Curve")
+    plt.yscale("log")   # ✅ y축 로그 변환
+    plt.title("Backtest Equity Curve (Log Scale)")
     plt.xlabel("Date")
-    plt.ylabel("Seed Money")
-    plt.grid(True)
+    plt.ylabel("Seed Money (log)")
+    plt.grid(True, which="both")  # 로그 스케일에서는 both 추천
     plt.tight_layout()
-    plt.savefig(OUT_DIR / "equity_curve.png")
+    plt.savefig(OUT_DIR / "equity_curve_log.png")
     plt.close()
 
     print("===== Backtest finished =====")

@@ -43,6 +43,22 @@ def split_4_1(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
     train_end = max(train_end, 1)
     train_end = min(train_end, n - 1)
 
+    df_shuffled = df.sample(frac=1, random_state=42).reset_index(drop=True)
+
+    train_df = df_shuffled.iloc[:train_end].copy()
+    val_df = df_shuffled.iloc[train_end:].copy()
+    return train_df, val_df
+
+
+def split_11_1(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """앞에서부터 순서대로 4:1 비율 split (train/val)."""
+    n = len(df)
+    train_end = (n * 11) // 12
+
+    # 안전장치
+    train_end = max(train_end, 1)
+    train_end = min(train_end, n - 1)
+
     train_df = df.iloc[:train_end].copy()
     val_df = df.iloc[train_end:].copy()
     return train_df, val_df
@@ -221,7 +237,6 @@ def add_features_and_labels(df: pd.DataFrame, ticker: str) -> pd.DataFrame:
 
     # ===== Label =====
     df[LABEL_COL] = (df[CLOSE_COL].shift(-1) / df[CLOSE_COL] - 1) * 10.0
-    df[LABEL_COL] = (df[LABEL_COL] - np.mean(df[LABEL_COL])) / np.std(df[LABEL_COL])
 
     # 다음날 없는 마지막 행 + 이전 행들이 적은 첫 부분 행들 제거
     df = df.dropna()
@@ -275,11 +290,13 @@ def build_monthly_backtest_datasets():
     tickers = sorted(full_dfs.keys())
     print(f"Tickers loaded: {len(tickers)}")
     print(f"Num features: {len(feature_cols)}")
+    all_cols = feature_cols + [LABEL_COL]
 
     # 월 시작 리스트 (MS = month start)
     month_starts = pd.date_range(TEST_START, TEST_END, freq="MS")
+    three_years_before = month_starts - pd.DateOffset(years=3)
 
-    for test_start in month_starts:
+    for test_start, train_start in zip(month_starts, three_years_before):
         test_end = (test_start + pd.offsets.MonthEnd(1))
         if test_end > TEST_END:
             test_end = TEST_END
@@ -294,17 +311,16 @@ def build_monthly_backtest_datasets():
         test_out.mkdir(parents=True, exist_ok=True)
 
         # --- split별 df 담기 ---
-        train_pool_dfs: Dict[str, pd.DataFrame] = {}
-        test_dfs: Dict[str, pd.DataFrame] = {}
         train_dfs: Dict[str, pd.DataFrame] = {}
         val_dfs: Dict[str, pd.DataFrame] = {}
+        test_dfs: Dict[str, pd.DataFrame] = {}
 
         # 1) test_start 이전 = train/val pool, test_start~test_end = test
         for tkr in tickers:
             df = full_dfs[tkr]
 
             # 날짜 필터링
-            pool = df[df[DATE_COL] < test_start].copy()
+            pool = df[(df[DATE_COL] >= train_start) & (df[DATE_COL] < test_start)].copy()
             test = df[(df[DATE_COL] >= test_start) & (df[DATE_COL] <= test_end)].copy()
 
             pool = pool.sort_values(DATE_COL).reset_index(drop=True)
@@ -313,18 +329,14 @@ def build_monthly_backtest_datasets():
             pool_len = len(pool)
             test_len = len(test)
 
-            train_pool_dfs[tkr] = pool
-            test_dfs[tkr] = test
+            tr, va = split_11_1(pool)
 
-            tr, va = split_4_1(pool)
             train_dfs[tkr] = tr
             val_dfs[tkr] = va
+            test_dfs[tkr] = test
 
         # 4) 표준화 통계는 "train만"으로 계산 (DATE_COL 제외)
         train_all = pd.concat(list(train_dfs.values()), ignore_index=True)
-
-        # label clip
-        train_all[LABEL_COL] = np.clip(train_all[LABEL_COL].values, -10.0, 10.0)
 
         feat_mean = train_all[feature_cols].mean()
         feat_std = train_all[feature_cols].std(ddof=0).replace(0.0, 1.0)
@@ -333,18 +345,13 @@ def build_monthly_backtest_datasets():
         stats_path = out_base / "feature_standardize_stats.npz"
         np.savez(
             stats_path,
-            feature_cols=np.array(feature_cols, dtype=object),
+            all_cols=np.array(all_cols, dtype=object),
             mean=feat_mean.values.astype(np.float32),
             std=feat_std.values.astype(np.float32),
         )
 
         # 5) 정규화 + 텐서 저장 (train/val/test)
         for tkr in tickers:
-            # label clip 일관 적용
-            train_dfs[tkr][LABEL_COL] = np.clip(train_dfs[tkr][LABEL_COL].values, -3.0, 3.0)
-            val_dfs[tkr][LABEL_COL]   = np.clip(val_dfs[tkr][LABEL_COL].values, -3.0, 3.0)
-            test_dfs[tkr][LABEL_COL]  = np.clip(test_dfs[tkr][LABEL_COL].values, -3.0, 3.0)
-
             # DATE_COL 제거하고 standardize
             tr = train_dfs[tkr].drop(columns=[DATE_COL], errors="ignore")
             va = val_dfs[tkr].drop(columns=[DATE_COL], errors="ignore")
@@ -358,6 +365,11 @@ def build_monthly_backtest_datasets():
             tr_std = clip_features(tr_std)
             va_std = clip_features(va_std)
             te_std = clip_features(te_std)
+
+            # label clip 일관 적용
+            tr_std[LABEL_COL] = np.clip(tr_std[LABEL_COL].values, -10.0, 10.0)
+            va_std[LABEL_COL] = np.clip(va_std[LABEL_COL].values, -10.0, 10.0)
+            te_std[LABEL_COL] = np.clip(te_std[LABEL_COL].values, -10.0, 10.0)
 
             save_tensors(tr_std, feature_cols, train_out, tkr)
             save_tensors(va_std, feature_cols, val_out, tkr)

@@ -3,6 +3,7 @@ import pandas as pd
 from pathlib import Path
 from tqdm import tqdm
 import calendar
+import numpy as np
 
 from utils import list_tickers
 from model_regression import RegressionTransformer   # ← 네가 말한 모델
@@ -20,7 +21,7 @@ REFINED_DIR = Path("refined_data")
 
 OUT_ROOT.mkdir(parents=True, exist_ok=True)
 
-SEEDS = list(range(10))
+SEEDS = list(range(3))
 
 
 # =========================
@@ -57,17 +58,43 @@ def load_test_tensor(split_dir: Path, tickers):
     return X
 
 
+def load_ensemble_weights(date):
+    """
+    date: '2020-01-01'
+    return: dict {seed: weight}
+    """
+    metrics_path = BASE_DIR / "regression_runs" / date / "metrics.csv"
+    if not metrics_path.exists():
+        raise FileNotFoundError(f"Missing metrics.csv for {date}")
+
+    df = pd.read_csv(metrics_path)
+
+    # seed별 val_exp 최대값
+    weights = (
+        df.groupby("seed")["val_exp"]
+        .max()
+        .to_dict()
+    )
+
+    # 음수 방지 + 정규화
+    w = np.array(list(weights.values()), dtype=np.float64)
+    w = np.clip(w, 0.0, None)
+    w = w / (w.sum() + 1e-8)
+
+    return dict(zip(weights.keys(), w))
+
+
 # =========================
 # Inference (ensemble mean)
 # =========================
 @torch.no_grad()
-def run_ensemble(models, X):
+def run_ensemble(models, X, weights):
     preds = []
 
-    for model in models:
+    for model_id, model in enumerate(models):
         model.eval()
         _, y_hat = model(X)   # [T, N]
-        preds.append(y_hat)
+        preds.append(y_hat * weights[model_id])
 
     return torch.stack(preds).mean(dim=0)  # [T, N]
 
@@ -78,7 +105,7 @@ def run_ensemble(models, X):
 def main():
     date_dirs = sorted([d for d in TENSOR_ROOT.iterdir() if d.is_dir()])
 
-    for date_dir in date_dirs:
+    for date_dir in date_dirs[-1:]:
         date = date_dir.name
         print(f"\n===== Inference {date} =====")
 
@@ -103,6 +130,8 @@ def main():
         # -------------------------
         # Load models
         # -------------------------
+        ensemble_weights = load_ensemble_weights(date)
+
         models = []
         for seed in SEEDS:
             ckpt = model_dir / f"best_model_seed{seed}.pt"
@@ -125,7 +154,7 @@ def main():
         # -------------------------
         # Inference
         # -------------------------
-        Y_hat = run_ensemble(models, X)  # [T, N]
+        Y_hat = run_ensemble(models, X, ensemble_weights)  # [T, N]
         Y_hat = Y_hat.cpu().numpy()
 
         # -------------------------
