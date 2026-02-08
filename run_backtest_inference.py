@@ -96,7 +96,7 @@ def run_ensemble(models, X, weights):
         _, y_hat = model(X)   # [T, N]
         preds.append(y_hat * weights[model_id])
 
-    return torch.stack(preds).mean(dim=0)  # [T, N]
+    return torch.stack(preds).sum(dim=0)  # [T, N]
 
 
 # =========================
@@ -105,7 +105,7 @@ def run_ensemble(models, X, weights):
 def main():
     date_dirs = sorted([d for d in TENSOR_ROOT.iterdir() if d.is_dir()])
 
-    for date_dir in date_dirs[-1:]:
+    for date_dir in date_dirs:
         date = date_dir.name
         print(f"\n===== Inference {date} =====")
 

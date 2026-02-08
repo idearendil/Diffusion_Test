@@ -84,6 +84,8 @@ def standardize_df(df: pd.DataFrame, feature_cols: List[str], mean: pd.Series, s
     x = (df[feature_cols] - mean) / std
     x = x.fillna(0.0)
 
+    x['predictable'] = np.where(x['predictable'] > 0, 1, 0)
+
     out = pd.concat([x, df[[LABEL_COL]].astype(np.float32)], axis=1)
     return out
 
@@ -329,7 +331,7 @@ def build_monthly_backtest_datasets():
             pool_len = len(pool)
             test_len = len(test)
 
-            tr, va = split_11_1(pool)
+            tr, va = split_4_1(pool)
 
             train_dfs[tkr] = tr
             val_dfs[tkr] = va

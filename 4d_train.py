@@ -246,7 +246,7 @@ def train_one_epoch(model, loader, optimizer, scaler, scheduler, epoch):
 def main():
     date_dirs = sorted([d for d in BASE_DATA_ROOT.iterdir() if d.is_dir()])
 
-    for date_dir in date_dirs[-1:]:
+    for date_dir in date_dirs:
         date = date_dir.name
 
         DATA_ROOT = date_dir
