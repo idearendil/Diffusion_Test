@@ -17,7 +17,7 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 START_SEED_MONEY = 1_000_000.0   # 시작 자금 (원, 단위 자유)
 TOP_K = 3
-
+PRE_SELECTED_TOLERANCE = 0.0
 
 # =========================
 # Load refined data cache
@@ -42,6 +42,7 @@ def main():
     equity_curve = []   # (date, seed_money)
 
     refined_cache = {}
+    pre_selected = []
 
     print("===== Backtest start =====")
 
@@ -53,10 +54,14 @@ def main():
             scores = row.sort_values(ascending=False)
 
             selected = []
+            maintained = []
+            tolerance_num = int(len(scores.index) * PRE_SELECTED_TOLERANCE)
+            tolerance_cnt = 0
             for ticker in scores.index:
+                tolerance_cnt += 1
+
                 if ticker not in refined_cache:
                     refined_cache[ticker] = load_refined_data(ticker)
-
                 ref_df = refined_cache[ticker]
 
                 if date not in ref_df.index:
@@ -65,19 +70,25 @@ def main():
 
                 if ref_df.loc[date, "predictable"] == 1.0:
                     selected.append(ticker)
+                    if ticker in pre_selected:
+                        if tolerance_cnt <= tolerance_num:
+                            maintained.append(ticker)
 
-                if len(selected) == TOP_K:
+            final_selected = maintained
+            for ticker in selected:
+                if len(final_selected) >= TOP_K:
                     break
+                final_selected.append(ticker)
 
             # 선택 종목 부족하면 skip (현금 보유)
-            if len(selected) < TOP_K:
+            if len(final_selected) < TOP_K:
                 equity_curve.append((date, seed_money))
                 continue
 
             alloc = seed_money / TOP_K
             next_seed_money = 0.0
 
-            for ticker in selected:
+            for ticker in final_selected:
                 ref_df = refined_cache[ticker]
 
                 try:
@@ -92,11 +103,18 @@ def main():
                 # =========================
                 # 수익률 계산
                 # =========================
-                ret = next_close / today_close
-                next_seed_money += alloc * ret
+                if ticker in pre_selected:
+                    bought_stocks = alloc // (today_close * (1 - 0.0001) * (1 - 0.002))     # 이전에 샀던 stock 개수 그대로
+                    leftover = alloc - bought_stocks * (today_close * (1 - 0.0001) * (1 - 0.002))
+                    next_seed_money += (bought_stocks * next_close * (1 - 0.0001) * (1 - 0.002) + leftover)    # 매도: 매매수수료 + 거래세 적용
+                else:
+                    bought_stocks = alloc // (today_close * (1 + 0.0001))     # 매수: 매매수수료 적용
+                    leftover = alloc - bought_stocks * today_close * (1 + 0.0001)
+                    next_seed_money += (bought_stocks * next_close * (1 - 0.0001) * (1 - 0.002) + leftover)    # 매도: 매매수수료 + 거래세 적용
 
             seed_money = next_seed_money
             equity_curve.append((date, seed_money))
+            pre_selected = final_selected
 
     # =========================
     # Save results
