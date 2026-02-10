@@ -284,8 +284,8 @@ def main():
             set_seed(seed)
 
             model = RegressionLSTMTransformer(
-                n_tokens=X_train.shape[2],   # ⚠ token dim 변경
-                in_dim=X_train.shape[3],     # ⚠ feature dim 변경
+                n_tokens=X_train.shape[1],   # ⚠ token dim 변경
+                in_dim=X_train.shape[2],     # ⚠ feature dim 변경
                 d_model=128,
                 n_head=8,
                 n_layers=3,
