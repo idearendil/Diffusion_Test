@@ -77,7 +77,7 @@ class TimeIndexDataset(Dataset):
         return self.X.shape[0] - SEQ_LEN + 1
 
     def __getitem__(self, idx: int):
-        return self.X[idx:idx+SEQ_LEN], self.Y[idx:idx+SEQ_LEN]
+        return self.X[idx:idx+SEQ_LEN], self.Y[idx+SEQ_LEN-1]
 
 
 # =========================
