@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 
 from utils import set_seed, list_tickers, load_split_tensors, TimeIndexDataset
-from model_regression import RegressionTransformer
+from model_regression import RegressionLSTMTransformer
 
 
 # =========================
@@ -80,7 +80,7 @@ def evaluate(model, loader):
 
     for x, y in loader:
         x, y = x.to(DEVICE), y.to(DEVICE)
-        mask = (x[:, :, 0] != 0).float()
+        mask = (x[:, -1, :, 0] != 0).float()
 
         y_hat, confi = model(x)
 
@@ -143,7 +143,7 @@ def evaluate_ensemble(models, weights, loader):
 
     for x, y in loader:
         x, y = x.to(DEVICE), y.to(DEVICE)
-        mask = (x[:, :, 0] != 0).float()
+        mask = (x[:, -1, :, 0] != 0).float()
 
         preds = [torch.stack(m(x)) for m in models]
         y_hat, confi = weighted_ensemble(preds, weights)
@@ -209,18 +209,18 @@ def train_one_epoch(model, loader, optimizer, scaler, scheduler, epoch):
 
     for x, y in loader:
         x, y = x.to(DEVICE), y.to(DEVICE)
-        predictable = (x[:, :, 0] != 0).float()
 
-        x = apply_token_mask(x, mask_ratio)
+        # predictable mask는 마지막 시점 기준
+        predictable = (x[:, -1, :, 0] != 0).float()
 
         optimizer.zero_grad(set_to_none=True)
 
         with torch.amp.autocast("cuda", enabled=AMP):
             y_hat, confi = model(x)
-            masked_confi = confi * predictable
-            masked_confi = masked_confi / masked_confi.sum(dim=1, keepdim=True)
 
-            loss_mse = ((y_hat - y) ** 2 * predictable).sum() / (predictable.sum() + 1e-8)
+            masked_confi = confi * predictable
+            masked_confi = masked_confi / (masked_confi.sum(dim=1, keepdim=True) + 1e-8)
+
             loss_exp = torch.sum(y * masked_confi, dim=1).mean()
             loss_var = torch.sum(y * masked_confi, dim=1).var()
 
@@ -283,13 +283,14 @@ def main():
         for seed in SEEDS:
             set_seed(seed)
 
-            model = RegressionTransformer(
-                n_tokens=X_train.shape[1],
-                in_dim=X_train.shape[2],
+            model = RegressionLSTMTransformer(
+                n_tokens=X_train.shape[2],   # ⚠ token dim 변경
+                in_dim=X_train.shape[3],     # ⚠ feature dim 변경
                 d_model=128,
                 n_head=8,
                 n_layers=3,
                 d_ff=256,
+                lstm_layers=1,
                 dropout=0.1,
             ).to(DEVICE)
 

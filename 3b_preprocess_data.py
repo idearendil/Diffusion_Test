@@ -26,6 +26,8 @@ CHANGE_RATE_COL = "ret_pct"  # 종가 기준 일간 수익률(%)
 TEST_START = pd.Timestamp("2020-01-01")
 TEST_END   = pd.Timestamp("2025-12-31")
 
+from utils import SEQ_LEN
+
 
 # =========================
 # Utils
@@ -373,6 +375,9 @@ def build_monthly_backtest_datasets():
             tr_std[LABEL_COL] = np.clip(tr_std[LABEL_COL].values, -10.0, 10.0)
             va_std[LABEL_COL] = np.clip(va_std[LABEL_COL].values, -10.0, 10.0)
             te_std[LABEL_COL] = np.clip(te_std[LABEL_COL].values, -10.0, 10.0)
+
+            va_std = pd.concat([tr_std.tail(SEQ_LEN-1), va_std], axis=0, ignore_index=True)
+            te_std = pd.concat([va_std.tail(SEQ_LEN-1), te_std], axis=0, ignore_index=True)
 
             save_tensors(tr_std, feature_cols, train_out, tkr)
             save_tensors(va_std, feature_cols, val_out, tkr)

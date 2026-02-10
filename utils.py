@@ -7,6 +7,8 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
+SEQ_LEN = 10
+
 
 # =========================
 # Reproducibility
@@ -72,10 +74,10 @@ class TimeIndexDataset(Dataset):
         self.Y = Y
 
     def __len__(self):
-        return self.X.shape[0]
+        return self.X.shape[0] - SEQ_LEN + 1
 
     def __getitem__(self, idx: int):
-        return self.X[idx], self.Y[idx]
+        return self.X[idx:idx+SEQ_LEN], self.Y[idx:idx+SEQ_LEN]
 
 
 # =========================
