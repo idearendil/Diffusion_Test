@@ -6,7 +6,9 @@ import calendar
 import numpy as np
 
 from utils import list_tickers
-from model_regression import RegressionTransformer   # ← 네가 말한 모델
+from model_regression import RegressionLSTMTransformer   # ← 네가 말한 
+
+from utils import SEQ_LEN
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -99,6 +101,24 @@ def run_ensemble(models, X, weights):
     return torch.stack(preds).sum(dim=0)  # [T, N]
 
 
+def make_lstm_sequences(x, seq_len=10):
+    """
+    x: [T, N, F]
+    return: [T-seq_len+1, seq_len, N, F]
+    """
+
+    T, N, F = x.shape
+
+    if T < seq_len:
+        raise ValueError("T must be >= seq_len")
+
+    xs = []
+    for i in range(T - seq_len + 1):
+        xs.append(x[i:i + seq_len])   # [seq_len, N, F]
+
+    return torch.stack(xs, dim=0)     # [T-seq_len+1, seq_len, N, F]
+
+
 # =========================
 # Main
 # =========================
@@ -125,6 +145,7 @@ def main():
         # -------------------------
         X = load_test_tensor(test_dir, tickers)
         T, N, F = X.shape
+        X = make_lstm_sequences(X, SEQ_LEN)  # [T-seq_len+1, seq_len, N, F]
         X = X.to(DEVICE)
 
         # -------------------------
@@ -138,15 +159,17 @@ def main():
             if not ckpt.exists():
                 raise FileNotFoundError(f"Missing model: {ckpt}")
 
-            model = RegressionTransformer(
-                n_tokens=N,
-                in_dim=F,
+            model = RegressionLSTMTransformer(
+                n_tokens=N,   # ⚠ token dim 변경
+                in_dim=F,     # ⚠ feature dim 변경
                 d_model=128,
                 n_head=8,
                 n_layers=3,
                 d_ff=256,
+                lstm_layers=1,
                 dropout=0.1,
             ).to(DEVICE)
+
 
             model.load_state_dict(torch.load(ckpt, map_location=DEVICE))
             models.append(model)
@@ -169,9 +192,9 @@ def main():
         if year == 2025 and month == 12:
             trading_days = trading_days[:-1]
 
-        if len(trading_days) != T:
+        if len(trading_days) != T - SEQ_LEN + 1:
             raise ValueError(
-                f"{date}: trading_days({len(trading_days)}) != T({T})"
+                f"{date}: trading_days({len(trading_days)}) != T({T - SEQ_LEN + 1})"
             )
 
         # -------------------------
