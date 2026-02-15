@@ -112,10 +112,11 @@ def preprocess_one_csv(in_path: str, out_path: str, cal_dates: pd.DatetimeIndex)
 
     # 등락률이 극단적인 행도 predictable=0
     df["predictable"] = np.where(
-        (df["종가"] / df["시가"] >= 1.25) | (df["종가"] / df["시가"] <= 0.75),
+        (df["종가"] / df["종가"].shift(1) >= 1.25) | (df["종가"] / df["종가"].shift(1) <= 0.75),
         0,
         df.get("predictable", 1)  # 기존 값 유지, 없으면 기본 1
     )
+    df.loc[df.index[0], "predictable"] = 0
 
     # 거래량이 너무 적은 행도 predictable=0
     df["predictable"] = np.where(

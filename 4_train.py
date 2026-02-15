@@ -38,7 +38,7 @@ AMP = (DEVICE == "cuda")
 # Utils
 # =========================
 def token_mask_ratio(epoch, max_epoch,
-                     start=0.0, end=0.0, end_ratio=0.0):
+                     start=0.3, end=0.0, end_ratio=0.2):
     real_max_epoch = max_epoch - int(end_ratio * max_epoch)
     if epoch <= real_max_epoch:
         alpha = epoch / real_max_epoch
@@ -88,19 +88,20 @@ def evaluate(model, loader):
         masked_confi = confi * mask
         masked_confi = masked_confi / masked_confi.sum(dim=1, keepdim=True)
 
+        loss_mse = ((y_hat - y) ** 2 * mask).sum() / (mask.sum() + 1e-8)
         loss_exp = torch.sum(y * masked_confi, dim=1).mean()
         loss_var = torch.sum(y * masked_confi, dim=1).var()
 
-        loss = -loss_exp * EXP_LOSS_WEIGHT + loss_var * VAR_LOSS_WEIGHT
+        loss = loss_mse * EXP_LOSS_WEIGHT + loss_var * VAR_LOSS_WEIGHT
         totals[8] += loss.item()
-        totals[2] += loss_exp.item()
-        totals[3] += loss_var.item()
+        totals[2] += loss_mse.item()
+        # totals[3] += loss_var.item()
 
         # evaluate complimental curves
-        confi *= mask
+        y_hat *= mask
 
-        _, topk = torch.topk(confi, k=3, dim=1)
-        clipped = torch.zeros_like(confi)
+        _, topk = torch.topk(y_hat, k=3, dim=1)
+        clipped = torch.zeros_like(y_hat)
         clipped.scatter_(1, topk, 1.0)
 
         # mask only
@@ -152,19 +153,20 @@ def evaluate_ensemble(models, weights, loader):
         masked_confi = confi * mask
         masked_confi = masked_confi / (masked_confi.sum(dim=1, keepdim=True) + 1e-8)
 
+        loss_mse = ((y_hat - y) ** 2 * mask).sum() / (mask.sum() + 1e-8)
         loss_exp = torch.sum(y * masked_confi, dim=1).mean()
         loss_var = torch.sum(y * masked_confi, dim=1).var()
 
-        loss = -loss_exp * EXP_LOSS_WEIGHT + loss_var * VAR_LOSS_WEIGHT
+        loss = loss_mse * EXP_LOSS_WEIGHT + loss_var * VAR_LOSS_WEIGHT
         totals[8] += loss.item()
-        totals[2] += loss_exp.item()
+        totals[2] += loss_mse.item()
         totals[3] += loss_var.item()
 
         # evaluate complimental curves
-        confi *= mask
+        y_hat *= mask
 
-        _, topk = torch.topk(confi, k=3, dim=1)
-        clipped = torch.zeros_like(confi)
+        _, topk = torch.topk(y_hat, k=3, dim=1)
+        clipped = torch.zeros_like(y_hat)
         clipped.scatter_(1, topk, 1.0)
 
         diff = (y_hat - y) * mask
@@ -224,7 +226,7 @@ def train_one_epoch(model, loader, optimizer, scaler, scheduler, epoch):
             loss_exp = torch.sum(y * masked_confi, dim=1).mean()
             loss_var = torch.sum(y * masked_confi, dim=1).var()
 
-            loss = -loss_exp * EXP_LOSS_WEIGHT + loss_var * VAR_LOSS_WEIGHT
+            loss = loss_mse * EXP_LOSS_WEIGHT + loss_var * VAR_LOSS_WEIGHT
 
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
@@ -308,13 +310,13 @@ def main():
 
                 csv_rows.append([seed, epoch, train_loss, *vals, optimizer.param_groups[0]["lr"]])
 
-                if vals[8] < best_score and epoch > 30:
-                    best_score = vals[8]
+                if vals[2] < best_score and epoch > 30:
+                    best_score = vals[2]
                     torch.save(model.state_dict(), ckpt)
 
             model.load_state_dict(torch.load(ckpt))
             best_models.append(model)
-            best_scores.append(-best_score)
+            best_scores.append(1-best_score)
 
         with open(LOG_CSV, "w", newline="") as f:
             writer = csv.writer(f)

@@ -93,7 +93,7 @@ def run_ensemble(models, X, weights):
 
     for model_id, model in enumerate(models):
         model.eval()
-        _, y_hat = model(X)   # [T, N]
+        y_hat, _ = model(X)   # [T, N]
         preds.append(y_hat * weights[model_id])
 
     return torch.stack(preds).sum(dim=0)  # [T, N]

@@ -16,8 +16,9 @@ OUT_DIR = BASE_DIR / "backtest_results"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 START_SEED_MONEY = 1_000_000.0   # 시작 자금 (원, 단위 자유)
-TOP_K = 3
+TOP_K = 5
 PRE_SELECTED_TOLERANCE = 0.0
+BUY_THRESHOLD = 0.02
 
 # =========================
 # Load refined data cache
@@ -68,7 +69,7 @@ def main():
                     print(f"Missing date: {ticker} {date}")
                     continue
 
-                if ref_df.loc[date, "predictable"] == 1.0:
+                if ref_df.loc[date, "predictable"] == 1.0 and scores[ticker] > BUY_THRESHOLD:
                     selected.append(ticker)
                     if ticker in pre_selected:
                         if tolerance_cnt <= tolerance_num:
@@ -95,10 +96,14 @@ def main():
                     today_close = ref_df.loc[date, "종가"]
                     next_date = ref_df.index[ref_df.index.get_loc(date) + 1]
                     next_close = ref_df.loc[next_date, "종가"]
+                    next_low = ref_df.loc[next_date, "저가"]
                 except (KeyError, IndexError):
                     # 다음 영업일 없으면 해당 포지션 유지 불가
                     next_seed_money += alloc
                     continue
+
+                if next_low < today_close * 0.9:
+                    next_close = today_close * 0.9
 
                 # =========================
                 # 수익률 계산
