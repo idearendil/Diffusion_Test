@@ -40,7 +40,7 @@ def load_refined_data(ticker):
 # =========================
 def main():
     inference_files = sorted(INFER_DIR.glob("*.csv"))
-    # test_val_lst = pickle.load(open(TEST_VAL_LST_PATH, "rb"))
+    test_val_lst = pickle.load(open(TEST_VAL_LST_PATH, "rb"))
 
     seed_money = START_SEED_MONEY
     equity_curve = []   # (date, seed_money)
@@ -137,13 +137,33 @@ def main():
     # =========================
     # Plot
     # =========================
-    plt.figure(figsize=(10, 6))
-    plt.plot(equity_df.index, equity_df["equity"])
-    plt.yscale("log")   # ✅ y축 로그 변환
+    # 2차원 리스트에서 index 7 값만 추출 → 1차원 시계열
+    test_series = []
+    for row in test_val_lst:
+        test_series += [row[7]] * 20
+    test_series += [test_val_lst[-1][7]] * 32
+
+    fig, ax1 = plt.subplots(figsize=(10, 6))
+
+    # --- Equity (왼쪽 y축, 로그) ---
+    ax1.plot(equity_df.index, equity_df["equity"], label="Equity")
+    ax1.set_yscale("log")
+    ax1.set_xlabel("Date")
+    ax1.set_ylabel("Equity (log)")
+
+    # --- Test value (오른쪽 y축) ---
+    ax2 = ax1.twinx()
+    ax2.plot(equity_df.index, test_series, linestyle="--", label="Test Value")
+    ax2.set_ylabel("Test Value")
+
+    ax1.grid(True, which="both")
+
+    # 범례 합치기
+    lines1, labels1 = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines1 + lines2, labels1 + labels2)
+
     plt.title("Backtest Equity Curve (Log Scale)")
-    plt.xlabel("Date")
-    plt.ylabel("Seed Money (log)")
-    plt.grid(True, which="both")  # 로그 스케일에서는 both 추천
     plt.tight_layout()
     plt.savefig(OUT_DIR / "equity_curve_log.png")
     plt.close()
