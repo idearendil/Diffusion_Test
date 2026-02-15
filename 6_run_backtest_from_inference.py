@@ -3,6 +3,7 @@ import numpy as np
 from pathlib import Path
 import matplotlib.pyplot as plt
 from tqdm import tqdm
+import pickle
 
 
 # =========================
@@ -12,6 +13,7 @@ BASE_DIR = Path("backtest")
 INFER_DIR = BASE_DIR / "inference_results"
 REFINED_DIR = Path("refined_data")
 OUT_DIR = BASE_DIR / "backtest_results"
+TEST_VAL_LST_PATH = BASE_DIR / "regression_runs/test_val_lst.pkl"
 
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -38,6 +40,7 @@ def load_refined_data(ticker):
 # =========================
 def main():
     inference_files = sorted(INFER_DIR.glob("*.csv"))
+    # test_val_lst = pickle.load(open(TEST_VAL_LST_PATH, "rb"))
 
     seed_money = START_SEED_MONEY
     equity_curve = []   # (date, seed_money)
@@ -108,6 +111,7 @@ def main():
                 # =========================
                 # 수익률 계산
                 # =========================
+                # print(ticker, (next_close / today_close - 1) * 100)
                 if ticker in pre_selected:
                     bought_stocks = alloc // (today_close * (1 - 0.0001) * (1 - 0.002))     # 이전에 샀던 stock 개수 그대로
                     leftover = alloc - bought_stocks * (today_close * (1 - 0.0001) * (1 - 0.002))

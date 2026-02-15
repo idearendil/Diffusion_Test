@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import List
 
 import torch
+import pickle
 from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
 from tqdm import tqdm
@@ -165,7 +166,7 @@ def evaluate_ensemble(models, weights, loader):
         # evaluate complimental curves
         y_hat *= mask
 
-        _, topk = torch.topk(y_hat, k=3, dim=1)
+        _, topk = torch.topk(y_hat, k=5, dim=1)
         clipped = torch.zeros_like(y_hat)
         clipped.scatter_(1, topk, 1.0)
 
@@ -247,6 +248,8 @@ def train_one_epoch(model, loader, optimizer, scaler, scheduler, epoch):
 # =========================
 def main():
     date_dirs = sorted([d for d in BASE_DATA_ROOT.iterdir() if d.is_dir()])
+
+    test_val_lst = []
 
     for date_dir in date_dirs:
         date = date_dir.name
@@ -346,6 +349,7 @@ def main():
 
         test_vals = evaluate_ensemble(best_models, best_scores, test_loader)
         print(f"[{date} Ensemble Test]", test_vals)
+        test_val_lst.append(test_vals)
 
         # 🔥 GPU 메모리 정리
         for m in best_models:
@@ -354,6 +358,10 @@ def main():
         best_scores.clear()
 
         torch.cuda.empty_cache()
+
+    test_val_lst_path = BASE_OUT_ROOT / "test_val_lst.pkl"
+    with open(test_val_lst_path, "wb") as f:
+        pickle.dump(test_val_lst, f)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 from typing import Dict, List, Tuple
+import matplotlib.pyplot as plt
 
 import numpy as np
 import pandas as pd
@@ -51,7 +52,7 @@ def split_4_1(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
 
 def split_11_1(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """앞에서부터 순서대로 4:1 비율 split (train/val)."""
+    """앞에서부터 순서대로 11:1 비율 split (train/val)."""
     n = len(df)
     train_end = (n * 11) // 12
 
@@ -269,7 +270,7 @@ def prepare_full_dfs() -> Tuple[Dict[str, pd.DataFrame], List[str]]:
         df = df.drop(columns=[OPEN_COL, CLOSE_COL, HIGH_COL, LOW_COL, VOLUME_COL, "vol_ma_5", "vol_ma_20", "vol_ma_60"], errors="ignore")
 
         # clip
-        df = clip_features(df)
+        # df = clip_features(df)
 
         full_dfs[ticker] = df
 
@@ -297,6 +298,7 @@ def build_monthly_backtest_datasets():
     # 월 시작 리스트 (MS = month start)
     month_starts = pd.date_range(TEST_START, TEST_END, freq="MS")
     three_years_before = month_starts - pd.DateOffset(years=3)
+    last_tag = month_starts[-1].strftime("%Y-%m-%d")
 
     for test_start, train_start in zip(month_starts, three_years_before):
         test_end = (test_start + pd.offsets.MonthEnd(1))
@@ -379,6 +381,62 @@ def build_monthly_backtest_datasets():
             save_tensors(te_std, feature_cols, test_out, tkr)
 
         print(f"[OK] {tag} saved -> {out_base} | pool_len={pool_len}, test_len={test_len}")
+
+        # ===============================
+        # 📊 마지막 반복 → 연도별 분포 Boxplot 저장
+        # ===============================
+        if tag == last_tag:
+            print("Generating yearly distribution boxplots...")
+
+            plot_dir = out_base / "yearly_boxplots"
+            plot_dir.mkdir(parents=True, exist_ok=True)
+
+            # train/val/test 전체 concat (DATE_COL 필요)
+            all_concat = []
+            for tkr in tickers:
+                tr_df = train_dfs[tkr].drop(columns=[DATE_COL], errors="ignore")
+                va_df = val_dfs[tkr].drop(columns=[DATE_COL], errors="ignore")
+                te_df = test_dfs[tkr].drop(columns=[DATE_COL], errors="ignore")
+
+                tr_std = standardize_df(tr_df, feature_cols, feat_mean, feat_std)
+                va_std = standardize_df(va_df, feature_cols, feat_mean, feat_std)
+                te_std = standardize_df(te_df, feature_cols, feat_mean, feat_std)
+
+                tr_std[DATE_COL] = train_dfs[tkr][DATE_COL]
+                va_std[DATE_COL] = val_dfs[tkr][DATE_COL]
+                te_std[DATE_COL] = test_dfs[tkr][DATE_COL]
+
+                tmp = pd.concat([tr_std, va_std, te_std], axis=0)
+                all_concat.append(tmp)
+
+            all_df = pd.concat(all_concat, ignore_index=True)
+
+            # 연도 컬럼 생성
+            all_df["year"] = all_df[DATE_COL].dt.year
+
+            years = sorted(all_df["year"].unique())
+
+            # feature + label 각각 plot
+            plot_cols = feature_cols + [LABEL_COL]
+
+            for col in plot_cols:
+                plt.figure(figsize=(10, 6))
+
+                data_per_year = []
+                for y in years:
+                    vals = all_df.loc[all_df["year"] == y, col].dropna().values
+                    data_per_year.append(vals)
+
+                plt.boxplot(data_per_year, tick_labels=years, showfliers=False)
+                plt.title(f"Yearly Distribution: {col}")
+                plt.xlabel("Year")
+                plt.ylabel(col)
+
+                save_path = plot_dir / f"{col}.png"
+                plt.savefig(save_path, dpi=120, bbox_inches="tight")
+                plt.close()
+
+            print(f"[OK] Boxplots saved → {plot_dir}")
 
 
 if __name__ == "__main__":
