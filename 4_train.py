@@ -83,6 +83,13 @@ def evaluate(model, loader):
         x, y = x.to(DEVICE), y.to(DEVICE)
         mask = (x[:, :, 0] != 0).float()
 
+        valid_count = mask.sum(dim=1, keepdim=True).clamp(min=1)
+        mean = (y * mask).sum(dim=1, keepdim=True) / valid_count
+        var = ((y - mean) * mask).pow(2).sum(dim=1, keepdim=True) / valid_count
+        std = var.sqrt().clamp(min=1e-6)
+        y_norm = (y - mean) / std
+        y_norm = y_norm * mask
+
         y_hat, confi = model(x)
 
         # evaluate training loss
@@ -146,6 +153,13 @@ def evaluate_ensemble(models, weights, loader):
     for x, y in loader:
         x, y = x.to(DEVICE), y.to(DEVICE)
         mask = (x[:, :, 0] != 0).float()
+
+        valid_count = mask.sum(dim=1, keepdim=True).clamp(min=1)
+        mean = (y * mask).sum(dim=1, keepdim=True) / valid_count
+        var = ((y - mean) * mask).pow(2).sum(dim=1, keepdim=True) / valid_count
+        std = var.sqrt().clamp(min=1e-6)
+        y_norm = (y - mean) / std
+        y_norm = y_norm * mask
 
         preds = [torch.stack(m(x)) for m in models]
         y_hat, confi = weighted_ensemble(preds, weights)
@@ -213,6 +227,14 @@ def train_one_epoch(model, loader, optimizer, scaler, scheduler, epoch):
     for x, y in loader:
         x, y = x.to(DEVICE), y.to(DEVICE)
         predictable = (x[:, :, 0] != 0).float()
+
+        mask = predictable
+        valid_count = mask.sum(dim=1, keepdim=True).clamp(min=1)
+        mean = (y * mask).sum(dim=1, keepdim=True) / valid_count
+        var = ((y - mean) * mask).pow(2).sum(dim=1, keepdim=True) / valid_count
+        std = var.sqrt().clamp(min=1e-6)
+        y_norm = (y - mean) / std
+        y_norm = y_norm * mask
 
         x = apply_token_mask(x, mask_ratio)
 

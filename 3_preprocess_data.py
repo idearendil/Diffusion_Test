@@ -270,7 +270,7 @@ def prepare_full_dfs() -> Tuple[Dict[str, pd.DataFrame], List[str]]:
         df = df.drop(columns=[OPEN_COL, CLOSE_COL, HIGH_COL, LOW_COL, VOLUME_COL, "vol_ma_5", "vol_ma_20", "vol_ma_60"], errors="ignore")
 
         # clip
-        # df = clip_features(df)
+        df = clip_features(df)
 
         full_dfs[ticker] = df
 

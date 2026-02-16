@@ -18,9 +18,10 @@ TEST_VAL_LST_PATH = BASE_DIR / "regression_runs/test_val_lst.pkl"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 START_SEED_MONEY = 1_000_000.0   # 시작 자금 (원, 단위 자유)
-TOP_K = 5
-PRE_SELECTED_TOLERANCE = 0.0
-BUY_THRESHOLD = 0.02
+TOP_K = 5                        # 하루에 매매할 종목 개수
+PRE_SELECTED_TOLERANCE = 0.0     # 전날에 매수한 종목을 그대로 유지할지를 결정
+BUY_THRESHOLD = 0.03             # 예측값이 1차적으로 이 값을 넘어야 매수
+HALT_THRESHOLD = 0.0            # 한 달의 수익률이 이보다 낮으면 그 달은 skip
 
 # =========================
 # Load refined data cache
@@ -53,6 +54,9 @@ def main():
     for infer_path in tqdm(inference_files):
         infer_df = pd.read_csv(infer_path, index_col=0)
         infer_df.index = pd.to_datetime(infer_df.index)
+
+        return_record = []
+        halt_flag = False
 
         for date, row in infer_df.iterrows():
             scores = row.sort_values(ascending=False)
@@ -89,6 +93,20 @@ def main():
                 equity_curve.append((date, seed_money))
                 continue
 
+            # 해당 모델로 너무 많이 잃었다면 stop loss
+            if not halt_flag:
+                result = 1.0
+                for row in return_record:
+                    row_mean = sum(row) / len(row)
+                    result *= row_mean
+                if result < HALT_THRESHOLD:
+                    halt_flag = True
+            if halt_flag:
+                equity_curve.append((date, seed_money))
+                continue
+            else:
+                return_record.append([])
+
             alloc = seed_money / TOP_K
             next_seed_money = 0.0
 
@@ -120,6 +138,8 @@ def main():
                     bought_stocks = alloc // (today_close * (1 + 0.0001))     # 매수: 매매수수료 적용
                     leftover = alloc - bought_stocks * today_close * (1 + 0.0001)
                     next_seed_money += (bought_stocks * next_close * (1 - 0.0001) * (1 - 0.002) + leftover)    # 매도: 매매수수료 + 거래세 적용
+
+                return_record[-1].append((next_close / today_close) - 0.0022)
 
             seed_money = next_seed_money
             equity_curve.append((date, seed_money))
