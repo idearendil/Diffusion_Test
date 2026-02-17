@@ -90,7 +90,6 @@ def evaluate(model, loader):
         var = ((y - mean) * mask).pow(2).sum(dim=1, keepdim=True) / valid_count
         std = var.sqrt().clamp(min=1e-6)
         y_norm = (y - mean) / std
-        y_norm = y_norm * mask
 
         y_hat, confi = model(x)
 
@@ -98,7 +97,7 @@ def evaluate(model, loader):
         masked_confi = confi * mask
         masked_confi = masked_confi / masked_confi.sum(dim=1, keepdim=True)
 
-        loss_mse = ((y_hat - y) ** 2 * mask).sum() / (mask.sum() + 1e-8)
+        loss_mse = ((y_hat - y_norm) ** 2 * mask).sum() / (mask.sum() + 1e-8)
         loss_exp = torch.sum(y * masked_confi, dim=1).mean()
         loss_var = torch.sum(y * masked_confi, dim=1).var()
 
@@ -115,7 +114,7 @@ def evaluate(model, loader):
         clipped.scatter_(1, topk, 1.0)
 
         # mask only
-        diff = (y_hat - y) * mask
+        diff = (y_hat - y_norm) * mask
         denom = mask.sum() + 1e-8
 
         rmse = torch.sqrt(diff.pow(2).sum() / denom)
@@ -125,7 +124,7 @@ def evaluate(model, loader):
         totals[1] += mae.item()
 
         # confi
-        diff = (y_hat - y) * clipped
+        diff = (y_hat - y_norm) * clipped
         denom1 = clipped.sum() + 1e-8
         denom2 = torch.sum(clipped, dim=1).mean() + 1e-8
 
@@ -161,7 +160,6 @@ def evaluate_ensemble(models, weights, loader):
         var = ((y - mean) * mask).pow(2).sum(dim=1, keepdim=True) / valid_count
         std = var.sqrt().clamp(min=1e-6)
         y_norm = (y - mean) / std
-        y_norm = y_norm * mask
 
         preds = [torch.stack(m(x)) for m in models]
         y_hat, confi = weighted_ensemble(preds, weights)
@@ -170,7 +168,7 @@ def evaluate_ensemble(models, weights, loader):
         masked_confi = confi * mask
         masked_confi = masked_confi / (masked_confi.sum(dim=1, keepdim=True) + 1e-8)
 
-        loss_mse = ((y_hat - y) ** 2 * mask).sum() / (mask.sum() + 1e-8)
+        loss_mse = ((y_hat - y_norm) ** 2 * mask).sum() / (mask.sum() + 1e-8)
         loss_exp = torch.sum(y * masked_confi, dim=1).mean()
         loss_var = torch.sum(y * masked_confi, dim=1).var()
 
@@ -186,7 +184,7 @@ def evaluate_ensemble(models, weights, loader):
         clipped = torch.zeros_like(y_hat)
         clipped.scatter_(1, topk, 1.0)
 
-        diff = (y_hat - y) * mask
+        diff = (y_hat - y_norm) * mask
         denom = mask.sum() + 1e-8
 
         rmse = torch.sqrt(diff.pow(2).sum() / denom)
@@ -197,7 +195,7 @@ def evaluate_ensemble(models, weights, loader):
         totals[0] += rmse.item()
         totals[1] += mae.item()
 
-        diff = (y_hat - y) * clipped
+        diff = (y_hat - y_norm) * clipped
         denom1 = clipped.sum() + 1e-8
         denom2 = torch.sum(clipped, dim=1).mean() + 1e-8
 
@@ -246,7 +244,7 @@ def train_one_epoch(model, loader, optimizer, scaler, scheduler, epoch, epoch_ma
             masked_confi = confi * predictable
             masked_confi = masked_confi / masked_confi.sum(dim=1, keepdim=True)
 
-            loss_mse = ((y_hat - y) ** 2 * predictable).sum() / (predictable.sum() + 1e-8)
+            loss_mse = ((y_hat - y_norm) ** 2 * predictable).sum() / (predictable.sum() + 1e-8)
             loss_exp = torch.sum(y * masked_confi, dim=1).mean()
             loss_var = torch.sum(y * masked_confi, dim=1).var()
 
