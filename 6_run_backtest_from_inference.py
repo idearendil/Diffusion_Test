@@ -160,8 +160,8 @@ def main():
     # 2차원 리스트에서 index 7 값만 추출 → 1차원 시계열
     test_series = []
     for row in test_val_lst:
-        test_series += [row[7]] * 20
-    test_series += [test_val_lst[-1][7]] * 32
+        test_series += [row[7]] * 73
+    test_series += [test_val_lst[-1][7]] * 12
 
     fig, ax1 = plt.subplots(figsize=(10, 6))
 

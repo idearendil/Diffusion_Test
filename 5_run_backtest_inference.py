@@ -21,7 +21,7 @@ REFINED_DIR = Path("refined_data")
 
 OUT_ROOT.mkdir(parents=True, exist_ok=True)
 
-SEEDS = list(range(3))
+SEEDS = list(range(6))
 
 
 # =========================

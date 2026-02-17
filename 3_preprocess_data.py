@@ -65,6 +65,14 @@ def split_11_1(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
     return train_df, val_df
 
 
+def split_3month(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """앞에서부터 순서대로 11:1 비율 split (train/val)."""
+    train_end = len(df) - 80
+    train_df = df.iloc[:train_end].copy()
+    val_df = df.iloc[train_end:].copy()
+    return train_df, val_df
+
+
 def clip_features(df: pd.DataFrame) -> pd.DataFrame:
     """(label, vol_* 제외) feature를 -10~10 클리핑"""
     df = df.copy()
@@ -297,11 +305,11 @@ def build_monthly_backtest_datasets():
 
     # 월 시작 리스트 (MS = month start)
     month_starts = pd.date_range(TEST_START, TEST_END, freq="MS")
-    three_years_before = month_starts - pd.DateOffset(years=3)
+    one_year_before = month_starts - pd.DateOffset(years=1)
     # last_tag = month_starts[-1].strftime("%Y-%m-%d")
     last_tag = "2026-01-01"
 
-    for test_start, train_start in zip(month_starts, three_years_before):
+    for test_start, train_start in zip(month_starts, one_year_before):
         test_end = (test_start + pd.offsets.MonthEnd(1))
         if test_end > TEST_END:
             test_end = TEST_END
@@ -325,8 +333,8 @@ def build_monthly_backtest_datasets():
             df = full_dfs[tkr]
 
             # 날짜 필터링
-            pool = df[(df[DATE_COL] >= train_start) & (df[DATE_COL] < test_start)].copy()
-            # pool = df[df[DATE_COL] < test_start].copy()
+            # pool = df[(df[DATE_COL] >= train_start) & (df[DATE_COL] < test_start)].copy()
+            pool = df[df[DATE_COL] < test_start].copy()
             test = df[(df[DATE_COL] >= test_start) & (df[DATE_COL] <= test_end)].copy()
 
             pool = pool.sort_values(DATE_COL).reset_index(drop=True)
@@ -335,7 +343,7 @@ def build_monthly_backtest_datasets():
             pool_len = len(pool)
             test_len = len(test)
 
-            tr, va = split_11_1(pool)
+            tr, va = split_3month(pool)
 
             train_dfs[tkr] = tr
             val_dfs[tkr] = va

@@ -21,14 +21,15 @@ BASE_OUT_ROOT.mkdir(parents=True, exist_ok=True)
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-SEEDS = list(range(3))
+SEEDS = list(range(6))
 
 TRAIN_BATCH_SIZE = 16
 TEST_BATCH_SIZE = 2048
 
 EXP_LOSS_WEIGHT = 1.0
 VAR_LOSS_WEIGHT = 0.0
-EPOCHS = 50
+MAX_EPOCHS_RATE = 50 * 800
+MIN_EPOCHS_RATE = 0.6
 LR = 2e-4
 WEIGHT_DECAY = 1e-4
 GRAD_CLIP = 1.0
@@ -217,9 +218,9 @@ def evaluate_ensemble(models, weights, loader):
 # =========================
 # Train
 # =========================
-def train_one_epoch(model, loader, optimizer, scaler, scheduler, epoch):
+def train_one_epoch(model, loader, optimizer, scaler, scheduler, epoch, epoch_max):
     model.train()
-    mask_ratio = token_mask_ratio(epoch, EPOCHS)
+    mask_ratio = token_mask_ratio(epoch, epoch_max)
 
     running = 0.0
     n_batches = 0
@@ -285,7 +286,6 @@ def main():
             continue
 
         OUT_DIR.mkdir(parents=True, exist_ok=True)
-        print(f"\n===== Backtest {date} =====")
 
         train_dir = DATA_ROOT / "train"
         val_dir   = DATA_ROOT / "val"
@@ -306,6 +306,7 @@ def main():
         csv_rows = []
         best_models = []
         best_scores = []
+        epoch_max = int(MAX_EPOCHS_RATE / len(X_train))
 
         for seed in SEEDS:
             set_seed(seed)
@@ -322,20 +323,20 @@ def main():
 
             optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
             scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                optimizer, T_max=EPOCHS, eta_min=LR * 0.05
+                optimizer, T_max=epoch_max, eta_min=LR * 0.05
             )
             scaler = torch.amp.GradScaler("cuda", enabled=AMP)
 
             best_score = 1e9
             ckpt = OUT_DIR / f"best_model_seed{seed}.pt"
 
-            for epoch in range(1, EPOCHS + 1):
-                train_loss = train_one_epoch(model, train_loader, optimizer, scaler, scheduler, epoch)
+            for epoch in range(1, epoch_max + 1):
+                train_loss = train_one_epoch(model, train_loader, optimizer, scaler, scheduler, epoch, epoch_max)
                 vals = evaluate(model, val_loader)
 
                 csv_rows.append([seed, epoch, train_loss, *vals, optimizer.param_groups[0]["lr"]])
 
-                if vals[2] < best_score and epoch > 30:
+                if vals[2] < best_score and epoch > epoch_max * MIN_EPOCHS_RATE:
                     best_score = vals[2]
                     torch.save(model.state_dict(), ckpt)
 
@@ -370,7 +371,7 @@ def main():
             plt.close()
 
         test_vals = evaluate_ensemble(best_models, best_scores, test_loader)
-        print(f"[{date} Ensemble Test]", test_vals)
+        print(f"[{date} Ensemble Test] | mse_loss: {test_vals[8]}, exp5: {test_vals[6]}")
         test_val_lst.append(test_vals)
 
         # 🔥 GPU 메모리 정리
