@@ -10,6 +10,7 @@ from tqdm import tqdm
 
 from utils import set_seed, list_tickers, load_split_tensors, TimeIndexDataset
 from model_regression import RegressionTransformer
+from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
 
 
 # =========================
@@ -40,7 +41,7 @@ AMP = (DEVICE == "cuda")
 # Utils
 # =========================
 def token_mask_ratio(epoch, max_epoch,
-                     start=0.3, end=0.3, end_ratio=0.0):
+                     start=0.3, end=0.0, end_ratio=0.2):
     real_max_epoch = max_epoch - int(end_ratio * max_epoch)
     if epoch <= real_max_epoch:
         alpha = epoch / real_max_epoch
@@ -235,7 +236,6 @@ def train_one_epoch(model, loader, optimizer, scaler, scheduler, epoch, epoch_ma
         var = ((y - mean) * mask).pow(2).sum(dim=1, keepdim=True) / valid_count
         std = var.sqrt().clamp(min=1e-6)
         y_norm = (y - mean) / std
-        y_norm = y_norm * mask
 
         x = apply_token_mask(x, mask_ratio)
 
@@ -307,6 +307,7 @@ def main():
         best_models = []
         best_scores = []
         epoch_max = int(MAX_EPOCHS_RATE / len(X_train))
+        epoch_warmup = int(epoch_max / 15)
 
         for seed in SEEDS:
             set_seed(seed)
@@ -322,10 +323,23 @@ def main():
             ).to(DEVICE)
 
             optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
-            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                optimizer, T_max=epoch_max, eta_min=LR * 0.05
-            )
             scaler = torch.amp.GradScaler("cuda", enabled=AMP)
+            warmup_scheduler = LinearLR(
+                optimizer,
+                start_factor=0.0,
+                end_factor=1.0,
+                total_iters=epoch_warmup
+            )
+            cosine_scheduler = CosineAnnealingLR(
+                optimizer,
+                T_max=epoch_max - epoch_warmup,
+                eta_min=1e-6
+            )
+            scheduler = SequentialLR(
+                optimizer,
+                schedulers=[warmup_scheduler, cosine_scheduler],
+                milestones=[epoch_warmup]
+            )
 
             best_score = 1e9
             ckpt = OUT_DIR / f"best_model_seed{seed}.pt"
