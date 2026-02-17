@@ -20,7 +20,7 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 START_SEED_MONEY = 1_000_000.0   # 시작 자금 (원, 단위 자유)
 TOP_K = 5                        # 하루에 매매할 종목 개수
 PRE_SELECTED_TOLERANCE = 0.0     # 전날에 매수한 종목을 그대로 유지할지를 결정
-BUY_THRESHOLD = 0.03             # 예측값이 1차적으로 이 값을 넘어야 매수
+BUY_THRESHOLD = 0.015             # 예측값이 1차적으로 이 값을 넘어야 매수
 HALT_THRESHOLD = 0.0            # 한 달의 수익률이 이보다 낮으면 그 달은 skip
 
 # =========================
@@ -43,11 +43,14 @@ def main():
     inference_files = sorted(INFER_DIR.glob("*.csv"))
     test_val_lst = pickle.load(open(TEST_VAL_LST_PATH, "rb"))
 
-    seed_money = START_SEED_MONEY
+    seed_A = START_SEED_MONEY // 2
+    seed_B = START_SEED_MONEY // 2
+    AB_flag = True      # True: A, False: B
     equity_curve = []   # (date, seed_money)
 
     refined_cache = {}
-    pre_selected = []
+    pre_selected_A = []
+    pre_selected_B = []
 
     print("===== Backtest start =====")
 
@@ -77,10 +80,10 @@ def main():
                     continue
 
                 if ref_df.loc[date, "predictable"] == 1.0 and scores[ticker] > BUY_THRESHOLD:
-                    selected.append(ticker)
-                    if ticker in pre_selected:
-                        if tolerance_cnt <= tolerance_num:
-                            maintained.append(ticker)
+                    if ((AB_flag and ticker in pre_selected_A) or (not AB_flag and ticker in pre_selected_B)) and tolerance_cnt <= tolerance_num:
+                        maintained.append(ticker)
+                    else:
+                        selected.append(ticker)
 
             final_selected = maintained
             for ticker in selected:
@@ -90,7 +93,7 @@ def main():
 
             # 선택 종목 부족하면 skip (현금 보유)
             if len(final_selected) < TOP_K:
-                equity_curve.append((date, seed_money))
+                equity_curve.append((date, seed_A + seed_B))
                 continue
 
             # 해당 모델로 너무 많이 잃었다면 stop loss
@@ -102,12 +105,15 @@ def main():
                 if result < HALT_THRESHOLD:
                     halt_flag = True
             if halt_flag:
-                equity_curve.append((date, seed_money))
+                equity_curve.append((date, seed_A + seed_B))
                 continue
             else:
                 return_record.append([])
 
-            alloc = seed_money / TOP_K
+            if AB_flag:
+                alloc = seed_A / TOP_K
+            else:
+                alloc = seed_B / TOP_K
             next_seed_money = 0.0
 
             for ticker in final_selected:
@@ -116,8 +122,9 @@ def main():
                 try:
                     today_close = ref_df.loc[date, "종가"]
                     next_date = ref_df.index[ref_df.index.get_loc(date) + 1]
-                    next_close = ref_df.loc[next_date, "종가"]
-                    next_low = ref_df.loc[next_date, "저가"]
+                    next2_date = ref_df.index[ref_df.index.get_loc(date) + 2]
+                    next_close = ref_df.loc[next2_date, "종가"]
+                    next_low = min(ref_df.loc[next_date, "저가"], ref_df.loc[next2_date, "저가"])
                 except (KeyError, IndexError):
                     # 다음 영업일 없으면 해당 포지션 유지 불가
                     next_seed_money += alloc
@@ -130,7 +137,7 @@ def main():
                 # 수익률 계산
                 # =========================
                 # print(ticker, (next_close / today_close - 1) * 100)
-                if ticker in pre_selected:
+                if ((AB_flag and ticker in pre_selected_A) or (not AB_flag and ticker in pre_selected_B)):
                     bought_stocks = alloc // (today_close * (1 - 0.0001) * (1 - 0.002))     # 이전에 샀던 stock 개수 그대로
                     leftover = alloc - bought_stocks * (today_close * (1 - 0.0001) * (1 - 0.002))
                     next_seed_money += (bought_stocks * next_close * (1 - 0.0001) * (1 - 0.002) + leftover)    # 매도: 매매수수료 + 거래세 적용
@@ -141,9 +148,15 @@ def main():
 
                 return_record[-1].append((next_close / today_close) - 0.0022)
 
-            seed_money = next_seed_money
-            equity_curve.append((date, seed_money))
-            pre_selected = final_selected
+            if AB_flag:
+                seed_A = next_seed_money
+                pre_selected_A = final_selected
+            else:
+                seed_B = next_seed_money
+                pre_selected_B = final_selected
+            equity_curve.append((date, seed_A + seed_B))
+
+            AB_flag = not AB_flag
 
     # =========================
     # Save results
@@ -160,8 +173,8 @@ def main():
     # 2차원 리스트에서 index 7 값만 추출 → 1차원 시계열
     test_series = []
     for row in test_val_lst:
-        test_series += [row[7]] * 73
-    test_series += [test_val_lst[-1][7]] * 12
+        test_series += [row[7]] * 20
+    test_series += [test_val_lst[-1][7]] * 31
 
     fig, ax1 = plt.subplots(figsize=(10, 6))
 
@@ -189,7 +202,7 @@ def main():
     plt.close()
 
     print("===== Backtest finished =====")
-    print(f"Final seed money: {seed_money:,.0f}")
+    print(f"Final seed money: {(seed_A + seed_B):,.0f}")
     print(f"Saved to: {OUT_DIR}")
 
 
