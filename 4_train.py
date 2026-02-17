@@ -40,7 +40,7 @@ AMP = (DEVICE == "cuda")
 # Utils
 # =========================
 def token_mask_ratio(epoch, max_epoch,
-                     start=0.3, end=0.0, end_ratio=0.2):
+                     start=0.3, end=0.3, end_ratio=0.0):
     real_max_epoch = max_epoch - int(end_ratio * max_epoch)
     if epoch <= real_max_epoch:
         alpha = epoch / real_max_epoch

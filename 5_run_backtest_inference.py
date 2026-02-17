@@ -167,7 +167,7 @@ def main():
         end   = f"{year:04d}-{month:02d}-{last_day:02d}"
         trading_days = load_trading_days(start, end)
         if year == 2025 and month == 12:
-            trading_days = trading_days[:-2]
+            trading_days = trading_days[:-1]
 
         if len(trading_days) != T:
             raise ValueError(

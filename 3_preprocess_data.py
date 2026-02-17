@@ -247,7 +247,7 @@ def add_features_and_labels(df: pd.DataFrame, ticker: str) -> pd.DataFrame:
              (df[CLOSE_COL].shift(1) + 1e-6) * df[VOLUME_COL]).cumsum()
 
     # ===== Label =====
-    df[LABEL_COL] = (df[CLOSE_COL].shift(-2) / df[CLOSE_COL] - 1) * 10.0
+    df[LABEL_COL] = (df[CLOSE_COL].shift(-1) / df[CLOSE_COL] - 1) * 10.0
 
     # 다음날 없는 마지막 행 + 이전 행들이 적은 첫 부분 행들 제거
     df = df.dropna()
