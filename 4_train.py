@@ -326,7 +326,7 @@ def main():
             scaler = torch.amp.GradScaler("cuda", enabled=AMP)
             warmup_scheduler = LinearLR(
                 optimizer,
-                start_factor=0.0,
+                start_factor=1e-8,
                 end_factor=1.0,
                 total_iters=epoch_warmup
             )
