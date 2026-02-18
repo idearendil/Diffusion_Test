@@ -307,7 +307,7 @@ def build_monthly_backtest_datasets():
     month_starts = pd.date_range(TEST_START, TEST_END, freq="MS")
     one_year_before = month_starts - pd.DateOffset(years=1)
     # last_tag = month_starts[-1].strftime("%Y-%m-%d")
-    last_tag = "2026-01-01"
+    last_tag = "2025-12-01"
 
     for test_start, train_start in zip(month_starts, one_year_before):
         test_end = (test_start + pd.offsets.MonthEnd(1))

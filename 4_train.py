@@ -31,8 +31,8 @@ TEST_BATCH_SIZE = 2048
 
 EXP_LOSS_WEIGHT = 1.0
 VAR_LOSS_WEIGHT = 0.0
-MAX_EPOCHS_RATE = 50 * 1000
-MIN_EPOCHS_RATE = 0.6
+MAX_EPOCHS_RATE = 50 * 400
+MIN_EPOCHS_RATE = 0.0
 LR = 2e-4
 WEIGHT_DECAY = 1e-4
 GRAD_CLIP = 1.0
@@ -307,7 +307,7 @@ def main():
         best_models = []
         best_scores = []
         epoch_max = int(MAX_EPOCHS_RATE / len(X_train))
-        epoch_warmup = int(epoch_max / 15)
+        epoch_warmup = max(int(epoch_max / 15), 1)
 
         for seed in SEEDS:
             set_seed(seed)
