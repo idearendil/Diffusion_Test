@@ -12,6 +12,8 @@ from utils import set_seed, list_tickers, load_split_tensors, TimeIndexDataset
 from model_regression import RegressionTransformer
 from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
 
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="torch.optim.lr_scheduler")
 
 # =========================
 # Global Config
@@ -346,7 +348,8 @@ def main():
                 train_loss = train_one_epoch(model, train_loader, optimizer, scaler, scheduler, epoch, epoch_max)
                 vals = evaluate(model, val_loader)
 
-                csv_rows.append([seed, epoch, train_loss, *vals, optimizer.param_groups[0]["lr"]])
+                if epoch > 1:
+                    csv_rows.append([seed, epoch, train_loss, *vals, optimizer.param_groups[0]["lr"]])
 
                 if vals[2] < best_score and epoch > epoch_max * MIN_EPOCHS_RATE:
                     best_score = vals[2]
