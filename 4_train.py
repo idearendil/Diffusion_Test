@@ -30,7 +30,7 @@ TRAIN_BATCH_SIZE = 16
 TEST_BATCH_SIZE = 2048
 
 EXP_LOSS_WEIGHT = 1.0
-VAR_LOSS_WEIGHT = 0.0
+VAR_LOSS_WEIGHT = 1.0
 MAX_EPOCHS_RATE = 50 * 1000
 MIN_EPOCHS_RATE = 0.6
 LR = 2e-4
@@ -43,7 +43,7 @@ AMP = (DEVICE == "cuda")
 # Utils
 # =========================
 def token_mask_ratio(epoch, max_epoch,
-                     start=0.5, end=0.0, end_ratio=0.2):
+                     start=0.3, end=0.0, end_ratio=0.2):
     real_max_epoch = max_epoch - int(end_ratio * max_epoch)
     if epoch <= real_max_epoch:
         alpha = epoch / real_max_epoch
@@ -85,39 +85,40 @@ def evaluate(model, loader):
 
     for x, y in loader:
         x, y = x.to(DEVICE), y.to(DEVICE)
-        mask = (x[:, :, 0] != 0).float()
+        y_abs = torch.abs(y)
+        predictable = (x[:, :, 0] != 0).float()
 
-        valid_count = mask.sum(dim=1, keepdim=True).clamp(min=1)
-        mean = (y * mask).sum(dim=1, keepdim=True) / valid_count
-        var = ((y - mean) * mask).pow(2).sum(dim=1, keepdim=True) / valid_count
+        valid_count = predictable.sum(dim=1, keepdim=True).clamp(min=1)
+        mean = (y * predictable).sum(dim=1, keepdim=True) / valid_count
+        var = ((y - mean) * predictable).pow(2).sum(dim=1, keepdim=True) / valid_count
         std = var.sqrt().clamp(min=1e-6)
         y_norm = (y - mean) / std
 
-        y_hat, confi = model(x)
+        mean = (y_abs * predictable).sum(dim=1, keepdim=True) / valid_count
+        var = ((y_abs - mean) * predictable).pow(2).sum(dim=1, keepdim=True) / valid_count
+        std = var.sqrt().clamp(min=1e-6)
+        y_norm_abs = (y_abs - mean) / std
 
-        # evaluate training loss
-        masked_confi = confi * mask
-        masked_confi = masked_confi / masked_confi.sum(dim=1, keepdim=True)
+        y_hat, y_abs_hat = model(x)
 
-        loss_mse = ((y_hat - y_norm) ** 2 * mask).sum() / (mask.sum() + 1e-8)
-        loss_exp = torch.sum(y * masked_confi, dim=1).mean()
-        loss_var = torch.sum(y * masked_confi, dim=1).var()
+        loss_mse = ((y_hat - y_norm) ** 2 * predictable).sum() / (predictable.sum() + 1e-8)
+        loss_var = ((y_abs_hat - y_norm_abs) ** 2 * predictable).sum() / (predictable.sum() + 1e-8)
 
         loss = loss_mse * EXP_LOSS_WEIGHT + loss_var * VAR_LOSS_WEIGHT
         totals[8] += loss.item()
         totals[2] += loss_mse.item()
-        # totals[3] += loss_var.item()
+        totals[3] += loss_var.item()
 
         # evaluate complimental curves
-        y_hat *= mask
+        y_hat *= predictable
 
         _, topk = torch.topk(y_hat, k=3, dim=1)
         clipped = torch.zeros_like(y_hat)
         clipped.scatter_(1, topk, 1.0)
 
         # mask only
-        diff = (y_hat - y_norm) * mask
-        denom = mask.sum() + 1e-8
+        diff = (y_hat - y_norm) * predictable
+        denom = predictable.sum() + 1e-8
 
         rmse = torch.sqrt(diff.pow(2).sum() / denom)
         mae  = diff.abs().sum() / denom
@@ -155,24 +156,25 @@ def evaluate_ensemble(models, weights, loader):
 
     for x, y in loader:
         x, y = x.to(DEVICE), y.to(DEVICE)
-        mask = (x[:, :, 0] != 0).float()
+        y_abs = torch.abs(y)
+        predictable = (x[:, :, 0] != 0).float()
 
-        valid_count = mask.sum(dim=1, keepdim=True).clamp(min=1)
-        mean = (y * mask).sum(dim=1, keepdim=True) / valid_count
-        var = ((y - mean) * mask).pow(2).sum(dim=1, keepdim=True) / valid_count
+        valid_count = predictable.sum(dim=1, keepdim=True).clamp(min=1)
+        mean = (y * predictable).sum(dim=1, keepdim=True) / valid_count
+        var = ((y - mean) * predictable).pow(2).sum(dim=1, keepdim=True) / valid_count
         std = var.sqrt().clamp(min=1e-6)
         y_norm = (y - mean) / std
 
+        mean = (y_abs * predictable).sum(dim=1, keepdim=True) / valid_count
+        var = ((y_abs - mean) * predictable).pow(2).sum(dim=1, keepdim=True) / valid_count
+        std = var.sqrt().clamp(min=1e-6)
+        y_norm_abs = (y_abs - mean) / std
+
         preds = [torch.stack(m(x)) for m in models]
-        y_hat, confi = weighted_ensemble(preds, weights)
+        y_hat, y_abs_hat = weighted_ensemble(preds, weights)
 
-        # evaluate training loss
-        masked_confi = confi * mask
-        masked_confi = masked_confi / (masked_confi.sum(dim=1, keepdim=True) + 1e-8)
-
-        loss_mse = ((y_hat - y_norm) ** 2 * mask).sum() / (mask.sum() + 1e-8)
-        loss_exp = torch.sum(y * masked_confi, dim=1).mean()
-        loss_var = torch.sum(y * masked_confi, dim=1).var()
+        loss_mse = ((y_hat - y_norm) ** 2 * predictable).sum() / (predictable.sum() + 1e-8)
+        loss_var = ((y_abs_hat - y_norm_abs) ** 2 * predictable).sum() / (predictable.sum() + 1e-8)
 
         loss = loss_mse * EXP_LOSS_WEIGHT + loss_var * VAR_LOSS_WEIGHT
         totals[8] += loss.item()
@@ -180,19 +182,19 @@ def evaluate_ensemble(models, weights, loader):
         totals[3] += loss_var.item()
 
         # evaluate complimental curves
-        y_hat *= mask
+        y_hat *= predictable
 
         _, topk = torch.topk(y_hat, k=5, dim=1)
         clipped = torch.zeros_like(y_hat)
         clipped.scatter_(1, topk, 1.0)
 
-        diff = (y_hat - y_norm) * mask
-        denom = mask.sum() + 1e-8
+        diff = (y_hat - y_norm) * predictable
+        denom = predictable.sum() + 1e-8
 
         rmse = torch.sqrt(diff.pow(2).sum() / denom)
         mae  = diff.abs().sum() / denom
-        exp  = (torch.sum(y * mask, dim=1) / denom).mean()
-        var  = (torch.sum(y * mask, dim=1) / denom).var()
+        exp  = (torch.sum(y * predictable, dim=1) / denom).mean()
+        var  = (torch.sum(y * predictable, dim=1) / denom).var()
 
         totals[0] += rmse.item()
         totals[1] += mae.item()
@@ -228,27 +230,29 @@ def train_one_epoch(model, loader, optimizer, scaler, scheduler, epoch, epoch_ma
 
     for x, y in loader:
         x, y = x.to(DEVICE), y.to(DEVICE)
+        y_abs = torch.abs(y)
         predictable = (x[:, :, 0] != 0).float()
 
-        mask = predictable
-        valid_count = mask.sum(dim=1, keepdim=True).clamp(min=1)
-        mean = (y * mask).sum(dim=1, keepdim=True) / valid_count
-        var = ((y - mean) * mask).pow(2).sum(dim=1, keepdim=True) / valid_count
+        valid_count = predictable.sum(dim=1, keepdim=True).clamp(min=1)
+        mean = (y * predictable).sum(dim=1, keepdim=True) / valid_count
+        var = ((y - mean) * predictable).pow(2).sum(dim=1, keepdim=True) / valid_count
         std = var.sqrt().clamp(min=1e-6)
         y_norm = (y - mean) / std
+
+        mean = (y_abs * predictable).sum(dim=1, keepdim=True) / valid_count
+        var = ((y_abs - mean) * predictable).pow(2).sum(dim=1, keepdim=True) / valid_count
+        std = var.sqrt().clamp(min=1e-6)
+        y_norm_abs = (y_abs - mean) / std
 
         x = apply_token_mask(x, mask_ratio)
 
         optimizer.zero_grad(set_to_none=True)
 
         with torch.amp.autocast("cuda", enabled=AMP):
-            y_hat, confi = model(x)
-            masked_confi = confi * predictable
-            masked_confi = masked_confi / masked_confi.sum(dim=1, keepdim=True)
+            y_hat, y_abs_hat = model(x)
 
             loss_mse = ((y_hat - y_norm) ** 2 * predictable).sum() / (predictable.sum() + 1e-8)
-            loss_exp = torch.sum(y * masked_confi, dim=1).mean()
-            loss_var = torch.sum(y * masked_confi, dim=1).var()
+            loss_var = ((y_abs_hat - y_norm_abs) ** 2 * predictable).sum() / (predictable.sum() + 1e-8)
 
             loss = loss_mse * EXP_LOSS_WEIGHT + loss_var * VAR_LOSS_WEIGHT
 
@@ -386,7 +390,7 @@ def main():
             plt.close()
 
         test_vals = evaluate_ensemble(best_models, best_scores, test_loader)
-        print(f"[{date} Ensemble Test] | mse_loss: {test_vals[8]}, exp5: {test_vals[6]}")
+        print(f"[{date} Ensemble Test] | mse_loss: {test_vals[2]}, var_loss: {test_vals[3]}, exp5: {test_vals[6]}")
         test_val_lst.append(test_vals)
 
         # 🔥 GPU 메모리 정리
