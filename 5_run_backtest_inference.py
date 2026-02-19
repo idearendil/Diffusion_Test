@@ -89,14 +89,16 @@ def load_ensemble_weights(date):
 # =========================
 @torch.no_grad()
 def run_ensemble(models, X, weights):
-    preds = []
+    y_preds = []
+    y_abs_preds = []
 
     for model_id, model in enumerate(models):
         model.eval()
-        y_hat, _ = model(X)   # [T, N]
-        preds.append(y_hat * weights[model_id])
+        y_hat, y_abs_hat = model(X)   # [T, N]
+        y_preds.append(y_hat * weights[model_id])
+        y_abs_preds.append(y_abs_hat * weights[model_id])
 
-    return torch.stack(preds).sum(dim=0)  # [T, N]
+    return torch.stack(y_preds).sum(dim=0), torch.stack(y_abs_preds).sum(dim=0)  # [T, N]
 
 
 # =========================
@@ -109,8 +111,9 @@ def main():
         date = date_dir.name
         print(f"\n===== Inference {date} =====")
 
-        out_csv = OUT_ROOT / f"{date}.csv"
-        if out_csv.exists():
+        out_csv = OUT_ROOT / f"{date}_pred.csv"
+        out_abs_csv = OUT_ROOT / f"{date}_abs.csv"
+        if out_csv.exists() and out_abs_csv.exists():
             print(f"[SKIP] {date} already inferred")
             continue
 
@@ -154,8 +157,9 @@ def main():
         # -------------------------
         # Inference
         # -------------------------
-        Y_hat = run_ensemble(models, X, ensemble_weights)  # [T, N]
+        Y_hat, Y_abs_hat = run_ensemble(models, X, ensemble_weights)  # [T, N]
         Y_hat = Y_hat.cpu().numpy()
+        Y_abs_hat = Y_abs_hat.cpu().numpy()
 
         # -------------------------
         # Trading days
@@ -181,7 +185,11 @@ def main():
         df.index.name = "date"
         df.to_csv(out_csv)
 
-        print(f"[OK] saved → {out_csv}")
+        df_abs = pd.DataFrame(Y_abs_hat, index=trading_days, columns=tickers)
+        df_abs.index.name = "date"
+        df_abs.to_csv(out_abs_csv)
+
+        print(f"[OK] saved → {out_csv}, {out_abs_csv}")
 
 
 if __name__ == "__main__":
