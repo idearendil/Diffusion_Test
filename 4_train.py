@@ -31,8 +31,8 @@ TEST_BATCH_SIZE = 2048
 
 EXP_LOSS_WEIGHT = 1.0
 VAR_LOSS_WEIGHT = 0.0
-MAX_EPOCHS_RATE = 50 * 400
-MIN_EPOCHS_RATE = 0.0
+MAX_EPOCHS_RATE = 50 * 1000
+MIN_EPOCHS_RATE = 0.6
 LR = 2e-4
 WEIGHT_DECAY = 1e-4
 GRAD_CLIP = 1.0
@@ -43,7 +43,7 @@ AMP = (DEVICE == "cuda")
 # Utils
 # =========================
 def token_mask_ratio(epoch, max_epoch,
-                     start=0.3, end=0.0, end_ratio=0.2):
+                     start=0.5, end=0.0, end_ratio=0.2):
     real_max_epoch = max_epoch - int(end_ratio * max_epoch)
     if epoch <= real_max_epoch:
         alpha = epoch / real_max_epoch
