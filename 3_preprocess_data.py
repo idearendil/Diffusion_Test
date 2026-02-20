@@ -312,11 +312,11 @@ def build_monthly_backtest_datasets():
 
     # 월 시작 리스트 (MS = month start)
     month_starts = pd.date_range(TEST_START, TEST_END, freq="MS")
-    one_year_before = month_starts - pd.DateOffset(years=1)
+    three_year_before = month_starts - pd.DateOffset(years=3)
     # last_tag = month_starts[-1].strftime("%Y-%m-%d")
     last_tag = "2025-12-01"
 
-    for test_start, train_start in zip(month_starts, one_year_before):
+    for test_start, train_start in zip(month_starts, three_year_before):
         test_end = (test_start + pd.offsets.MonthEnd(1))
         if test_end > TEST_END:
             test_end = TEST_END
@@ -340,8 +340,8 @@ def build_monthly_backtest_datasets():
             df = full_dfs[tkr]
 
             # 날짜 필터링
-            # pool = df[(df[DATE_COL] >= train_start) & (df[DATE_COL] < test_start)].copy()
-            pool = df[df[DATE_COL] < test_start].copy()
+            pool = df[(df[DATE_COL] >= train_start) & (df[DATE_COL] < test_start)].copy()
+            # pool = df[df[DATE_COL] < test_start].copy()
             test = df[(df[DATE_COL] >= test_start) & (df[DATE_COL] <= test_end)].copy()
 
             pool = pool.sort_values(DATE_COL).reset_index(drop=True)

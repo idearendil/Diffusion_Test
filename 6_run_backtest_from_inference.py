@@ -21,6 +21,7 @@ START_SEED_MONEY = 1_000_000.0   # 시작 자금 (원, 단위 자유)
 TOP_K = 3                        # 하루에 매매할 종목 개수
 PRE_SELECTED_TOLERANCE = 0.0     # 전날에 매수한 종목을 그대로 유지할지를 결정
 BUY_THRESHOLD = 0.085             # 예측값이 1차적으로 이 값을 넘어야 매수
+VAR_THRESHOLD = 1e8               # 분산 예측값이 이 값보다 작아야 매수
 HALT_THRESHOLD = 0.0            # 한 달의 수익률이 이보다 낮으면 그 달은 skip
 
 # =========================
@@ -84,7 +85,7 @@ def main():
                     print(f"Missing date: {ticker} {date}")
                     continue
 
-                if ref_df.loc[date, "predictable"] == 1.0 and scores[ticker] > BUY_THRESHOLD:
+                if ref_df.loc[date, "predictable"] == 1.0 and scores[ticker] > BUY_THRESHOLD and abs_row[ticker] < VAR_THRESHOLD:
                     if ticker in pre_selected and tolerance_cnt <= tolerance_num:
                         maintained.append(ticker)
                     else:
