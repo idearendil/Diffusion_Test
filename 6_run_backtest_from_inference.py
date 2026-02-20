@@ -84,7 +84,7 @@ def main():
                     print(f"Missing date: {ticker} {date}")
                     continue
 
-                if ref_df.loc[date, "predictable"] == 1.0 and scores[ticker] > BUY_THRESHOLD and abs_row[ticker] < 0.6:
+                if ref_df.loc[date, "predictable"] == 1.0 and scores[ticker] > BUY_THRESHOLD:
                     if ticker in pre_selected and tolerance_cnt <= tolerance_num:
                         maintained.append(ticker)
                     else:
