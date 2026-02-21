@@ -42,7 +42,6 @@ def load_refined_data(ticker):
 # =========================
 def main():
     inference_files = sorted(INFER_DIR.glob("*_pred.csv"))
-    inference_abs_files = sorted(INFER_DIR.glob("*_abs.csv"))
     test_val_lst = pickle.load(open(TEST_VAL_LST_PATH, "rb"))
 
     seed_money = START_SEED_MONEY
@@ -53,21 +52,14 @@ def main():
 
     print("===== Backtest start =====")
 
-    for infer_path in tqdm(zip(inference_files, inference_abs_files)):
-        infer_df = pd.read_csv(infer_path[0], index_col=0)
-        infer_abs_df = pd.read_csv(infer_path[1], index_col=0)
+    for infer_path in tqdm(inference_files):
+        infer_df = pd.read_csv(infer_path, index_col=0)
         infer_df.index = pd.to_datetime(infer_df.index)
-        infer_abs_df.index = pd.to_datetime(infer_abs_df.index)
 
         return_record = []
         halt_flag = False
 
-        pred_rows = [(date, row) for date, row in infer_df.iterrows()]
-        abs_rows = [(date, row) for date, row in infer_abs_df.iterrows()]
-
-        for pred_row, abs_row in zip(pred_rows, abs_rows):
-            date, row = pred_row
-            _, abs_row = abs_row
+        for date, row in infer_df.iterrows():
             scores = row.sort_values(ascending=False)
 
             selected = []
@@ -85,7 +77,7 @@ def main():
                     print(f"Missing date: {ticker} {date}")
                     continue
 
-                if ref_df.loc[date, "predictable"] == 1.0 and scores[ticker] > BUY_THRESHOLD and abs_row[ticker] < VAR_THRESHOLD:
+                if ref_df.loc[date, "predictable"] == 1.0 and scores[ticker] > BUY_THRESHOLD:
                     if ticker in pre_selected and tolerance_cnt <= tolerance_num:
                         maintained.append(ticker)
                     else:

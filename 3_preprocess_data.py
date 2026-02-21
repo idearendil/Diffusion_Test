@@ -340,8 +340,8 @@ def build_monthly_backtest_datasets():
             df = full_dfs[tkr]
 
             # 날짜 필터링
-            pool = df[(df[DATE_COL] >= train_start) & (df[DATE_COL] < test_start)].copy()
-            # pool = df[df[DATE_COL] < test_start].copy()
+            # pool = df[(df[DATE_COL] >= train_start) & (df[DATE_COL] < test_start)].copy()
+            pool = df[df[DATE_COL] < test_start].copy()
             test = df[(df[DATE_COL] >= test_start) & (df[DATE_COL] <= test_end)].copy()
 
             pool = pool.sort_values(DATE_COL).reset_index(drop=True)

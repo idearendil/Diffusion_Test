@@ -5,6 +5,7 @@ from typing import List
 import torch
 import pickle
 from torch.utils.data import DataLoader
+import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 
@@ -63,14 +64,68 @@ def apply_token_mask(x, mask_ratio):
     return x
 
 
+def topk_pairwise_loss_v2(
+    y_true,          # [B, N]
+    y_pred,          # [B, N]
+    predictable,     # [B, N] (0 or 1)
+    top_ratio=0.1,
+    alpha=3.0,
+    eps=1e-8,
+):
+    B, N = y_true.shape
+    total_loss = 0.0
+    total_weight = 0.0
+
+    for b in range(B):
+        mask = predictable[b].bool()
+
+        # predictable 종목만 선택
+        y_t = y_true[b][mask]   # [Nb]
+        y_p = y_pred[b][mask]   # [Nb]
+
+        Nb = y_t.size(0)
+        if Nb < 2:
+            continue
+
+        # ----- rank 계산 (predictable subset 안에서) -----
+        sorted_idx = torch.argsort(y_t, descending=True)
+        rank_pos = torch.zeros_like(sorted_idx)
+        rank_pos[sorted_idx] = torch.arange(Nb, device=y_t.device)
+
+        k = max(1, int(Nb * top_ratio))
+        top_mask = (rank_pos < k).float()  # [Nb]
+
+        # ----- pairwise diff -----
+        diff_true = y_t.unsqueeze(1) - y_t.unsqueeze(0)  # [Nb, Nb]
+        diff_pred = y_p.unsqueeze(1) - y_p.unsqueeze(0)
+
+        pair_loss = F.softplus(-diff_true * diff_pred)  # log(1+exp)
+
+        # ----- weight 구성 -----
+        weight = torch.ones_like(pair_loss)
+
+        top_pair = (top_mask.unsqueeze(1) + top_mask.unsqueeze(0)) > 0
+        weight[top_pair] *= alpha
+
+        # 자기 자신 비교 제거
+        diag_mask = ~torch.eye(Nb, dtype=torch.bool, device=y_t.device)
+        pair_loss = pair_loss[diag_mask]
+        weight = weight[diag_mask]
+
+        total_loss += (pair_loss * weight).sum()
+        total_weight += weight.sum()
+
+    return total_loss / (total_weight + eps)
+
+
 def weighted_ensemble(preds: List[torch.Tensor], weights: List[float]):
     w = torch.tensor(weights, device=preds[0].device)
     w = torch.clamp(w, min=0.0)
     w = w / (w.sum() + 1e-8)
 
-    stacked = torch.stack(preds)  # [M, 2, B, N]
-    y_hat = (stacked * w[:, None, None, None]).sum(0)
-    return y_hat[0], y_hat[1]
+    stacked = torch.stack(preds)  # [M, B, N]
+    y_hat = (stacked * w[:, None, None]).sum(0)
+    return y_hat
 
 
 # =========================
@@ -80,12 +135,11 @@ def weighted_ensemble(preds: List[torch.Tensor], weights: List[float]):
 def evaluate(model, loader):
     model.eval()
 
-    totals = [0.0] * 9
+    totals = [0.0] * 3
     n_batches = 0
 
     for x, y in loader:
         x, y = x.to(DEVICE), y.to(DEVICE)
-        y_abs = torch.abs(y)
         predictable = (x[:, :, 0] != 0).float()
 
         valid_count = predictable.sum(dim=1, keepdim=True).clamp(min=1)
@@ -94,20 +148,11 @@ def evaluate(model, loader):
         std = var.sqrt().clamp(min=1e-6)
         y_norm = (y - mean) / std
 
-        mean = (y_abs * predictable).sum(dim=1, keepdim=True) / valid_count
-        var = ((y_abs - mean) * predictable).pow(2).sum(dim=1, keepdim=True) / valid_count
-        std = var.sqrt().clamp(min=1e-6)
-        y_norm_abs = (y_abs - mean) / std
+        y_hat = model(x)
 
-        y_hat, y_abs_hat = model(x)
+        loss = topk_pairwise_loss_v2(y_norm, y_hat, predictable) * EXP_LOSS_WEIGHT
 
-        loss_mse = ((y_hat - y_norm) ** 2 * predictable).sum() / (predictable.sum() + 1e-8)
-        loss_var = ((y_abs_hat - y_norm_abs) ** 2 * predictable).sum() / (predictable.sum() + 1e-8)
-
-        loss = loss_mse * EXP_LOSS_WEIGHT + loss_var * VAR_LOSS_WEIGHT
-        totals[8] += loss.item()
-        totals[2] += loss_mse.item()
-        totals[3] += loss_var.item()
+        totals[0] += loss.item()
 
         # evaluate complimental curves
         y_hat *= predictable
@@ -116,30 +161,13 @@ def evaluate(model, loader):
         clipped = torch.zeros_like(y_hat)
         clipped.scatter_(1, topk, 1.0)
 
-        # mask only
-        diff = (y_hat - y_norm) * predictable
-        denom = predictable.sum() + 1e-8
-
-        rmse = torch.sqrt(diff.pow(2).sum() / denom)
-        mae  = diff.abs().sum() / denom
-
-        totals[0] += rmse.item()
-        totals[1] += mae.item()
-
         # confi
-        diff = (y_hat - y_norm) * clipped
-        denom1 = clipped.sum() + 1e-8
         denom2 = torch.sum(clipped, dim=1).mean() + 1e-8
-
-        rmse = torch.sqrt(diff.pow(2).sum() / denom1)
-        mae  = diff.abs().sum() / denom1
         exp  = (torch.sum(y * clipped, dim=1) / denom2).mean()
         var  = (torch.sum(y * clipped, dim=1) / denom2).var()
 
-        totals[4] += rmse.item()
-        totals[5] += mae.item()
-        totals[6] += exp.item()
-        totals[7] += var.item()
+        totals[1] += exp.item()
+        totals[2] += var.item()
 
         n_batches += 1
 
@@ -151,12 +179,11 @@ def evaluate_ensemble(models, weights, loader):
     for m in models:
         m.eval()
 
-    totals = [0.0] * 9
+    totals = [0.0] * 3
     n_batches = 0
 
     for x, y in loader:
         x, y = x.to(DEVICE), y.to(DEVICE)
-        y_abs = torch.abs(y)
         predictable = (x[:, :, 0] != 0).float()
 
         valid_count = predictable.sum(dim=1, keepdim=True).clamp(min=1)
@@ -165,53 +192,27 @@ def evaluate_ensemble(models, weights, loader):
         std = var.sqrt().clamp(min=1e-6)
         y_norm = (y - mean) / std
 
-        mean = (y_abs * predictable).sum(dim=1, keepdim=True) / valid_count
-        var = ((y_abs - mean) * predictable).pow(2).sum(dim=1, keepdim=True) / valid_count
-        std = var.sqrt().clamp(min=1e-6)
-        y_norm_abs = (y_abs - mean) / std
+        preds = [m(x) for m in models]
+        y_hat = weighted_ensemble(preds, weights)
 
-        preds = [torch.stack(m(x)) for m in models]
-        y_hat, y_abs_hat = weighted_ensemble(preds, weights)
+        loss = topk_pairwise_loss_v2(y_norm, y_hat, predictable) * EXP_LOSS_WEIGHT
 
-        loss_mse = ((y_hat - y_norm) ** 2 * predictable).sum() / (predictable.sum() + 1e-8)
-        loss_var = ((y_abs_hat - y_norm_abs) ** 2 * predictable).sum() / (predictable.sum() + 1e-8)
-
-        loss = loss_mse * EXP_LOSS_WEIGHT + loss_var * VAR_LOSS_WEIGHT
-        totals[8] += loss.item()
-        totals[2] += loss_mse.item()
-        totals[3] += loss_var.item()
+        totals[0] += loss.item()
 
         # evaluate complimental curves
         y_hat *= predictable
 
-        _, topk = torch.topk(y_hat, k=5, dim=1)
+        _, topk = torch.topk(y_hat, k=3, dim=1)
         clipped = torch.zeros_like(y_hat)
         clipped.scatter_(1, topk, 1.0)
 
-        diff = (y_hat - y_norm) * predictable
-        denom = predictable.sum() + 1e-8
-
-        rmse = torch.sqrt(diff.pow(2).sum() / denom)
-        mae  = diff.abs().sum() / denom
-        exp  = (torch.sum(y * predictable, dim=1) / denom).mean()
-        var  = (torch.sum(y * predictable, dim=1) / denom).var()
-
-        totals[0] += rmse.item()
-        totals[1] += mae.item()
-
-        diff = (y_hat - y_norm) * clipped
-        denom1 = clipped.sum() + 1e-8
+        # confi
         denom2 = torch.sum(clipped, dim=1).mean() + 1e-8
-
-        rmse = torch.sqrt(diff.pow(2).sum() / denom1)
-        mae  = diff.abs().sum() / denom1
         exp  = (torch.sum(y * clipped, dim=1) / denom2).mean()
         var  = (torch.sum(y * clipped, dim=1) / denom2).var()
 
-        totals[4] += rmse.item()
-        totals[5] += mae.item()
-        totals[6] += exp.item()
-        totals[7] += var.item()
+        totals[1] += exp.item()
+        totals[2] += var.item()
 
         n_batches += 1
 
@@ -230,7 +231,6 @@ def train_one_epoch(model, loader, optimizer, scaler, scheduler, epoch, epoch_ma
 
     for x, y in loader:
         x, y = x.to(DEVICE), y.to(DEVICE)
-        y_abs = torch.abs(y)
         predictable = (x[:, :, 0] != 0).float()
 
         valid_count = predictable.sum(dim=1, keepdim=True).clamp(min=1)
@@ -239,22 +239,14 @@ def train_one_epoch(model, loader, optimizer, scaler, scheduler, epoch, epoch_ma
         std = var.sqrt().clamp(min=1e-6)
         y_norm = (y - mean) / std
 
-        mean = (y_abs * predictable).sum(dim=1, keepdim=True) / valid_count
-        var = ((y_abs - mean) * predictable).pow(2).sum(dim=1, keepdim=True) / valid_count
-        std = var.sqrt().clamp(min=1e-6)
-        y_norm_abs = (y_abs - mean) / std
-
         x = apply_token_mask(x, mask_ratio)
 
         optimizer.zero_grad(set_to_none=True)
 
         with torch.amp.autocast("cuda", enabled=AMP):
-            y_hat, y_abs_hat = model(x)
+            y_hat = model(x)
 
-            loss_mse = ((y_hat - y_norm) ** 2 * predictable).sum() / (predictable.sum() + 1e-8)
-            loss_var = ((y_abs_hat - y_norm_abs) ** 2 * predictable).sum() / (predictable.sum() + 1e-8)
-
-            loss = loss_mse * EXP_LOSS_WEIGHT + loss_var * VAR_LOSS_WEIGHT
+            loss = topk_pairwise_loss_v2(y_norm, y_hat, predictable) * EXP_LOSS_WEIGHT
 
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
@@ -355,21 +347,20 @@ def main():
                 if epoch > 1:
                     csv_rows.append([seed, epoch, train_loss, *vals, optimizer.param_groups[0]["lr"]])
 
-                if vals[2] < best_score and epoch > epoch_max * MIN_EPOCHS_RATE:
-                    best_score = vals[2]
+                if vals[0] < best_score and epoch > epoch_max * MIN_EPOCHS_RATE:
+                    best_score = vals[0]
                     torch.save(model.state_dict(), ckpt)
 
             model.load_state_dict(torch.load(ckpt))
             best_models.append(model)
-            best_scores.append(1.5-best_score)
+            best_scores.append(1.0-best_score)
 
         with open(LOG_CSV, "w", newline="") as f:
             writer = csv.writer(f)
             writer.writerow([
                 "seed", "epoch", "train_loss",
-                "val_rmse", "val_mae", "val_exp", "val_var",
-                "val_confi_rmse", "val_confi_mae", "val_confi_exp", "val_confi_var",
-                "val_loss", "lr"
+                "val_loss", "val_exp5", "val_exp5_var",
+                "lr"
             ])
             writer.writerows(csv_rows)
 
@@ -379,7 +370,7 @@ def main():
         import pandas as pd
         df = pd.read_csv(LOG_CSV)
 
-        for col in ["train_loss", "val_rmse", "val_mae", "val_exp", "val_var", "val_confi_rmse", "val_confi_mae", "val_confi_exp", "val_confi_var", "val_loss"]:
+        for col in ["train_loss", "val_loss", "val_exp5", "val_exp5_var"]:
             plt.figure()
             for seed in SEEDS:
                 d = df[df.seed == seed]
@@ -390,7 +381,7 @@ def main():
             plt.close()
 
         test_vals = evaluate_ensemble(best_models, best_scores, test_loader)
-        print(f"[{date} Ensemble Test] | mse_loss: {test_vals[2]}, var_loss: {test_vals[3]}, exp5: {test_vals[6]}")
+        print(f"[{date} Ensemble Test] | rank_loss: {test_vals[0]}, exp5: {test_vals[1]}, exp5_var: {test_vals[2]}")
         test_val_lst.append(test_vals)
 
         # 🔥 GPU 메모리 정리
