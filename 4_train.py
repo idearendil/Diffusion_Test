@@ -151,6 +151,7 @@ def evaluate(model, loader):
         y_hat = model(x)
 
         loss = topk_pairwise_loss_v2(y_norm, y_hat, predictable) * EXP_LOSS_WEIGHT
+        # loss_mse = ((y_hat - y_norm) ** 2 * predictable).sum() / (predictable.sum() + 1e-8)
 
         totals[0] += loss.item()
 
@@ -269,6 +270,7 @@ def main():
     date_dirs = sorted([d for d in BASE_DATA_ROOT.iterdir() if d.is_dir()])
 
     test_val_lst = []
+    ensemble_weights = []
 
     for date_dir in date_dirs:
         date = date_dir.name
@@ -383,6 +385,7 @@ def main():
         test_vals = evaluate_ensemble(best_models, best_scores, test_loader)
         print(f"[{date} Ensemble Test] | rank_loss: {test_vals[0]}, exp5: {test_vals[1]}, exp5_var: {test_vals[2]}")
         test_val_lst.append(test_vals)
+        ensemble_weights.append(best_scores)
 
         # 🔥 GPU 메모리 정리
         for m in best_models:
@@ -393,8 +396,11 @@ def main():
         torch.cuda.empty_cache()
 
     test_val_lst_path = BASE_OUT_ROOT / "test_val_lst.pkl"
+    ensemble_weights_path = BASE_OUT_ROOT / "ensemble_weights.pkl"
     with open(test_val_lst_path, "wb") as f:
         pickle.dump(test_val_lst, f)
+    with open(ensemble_weights_path, "wb") as f:
+        pickle.dump(ensemble_weights, f)
 
 
 if __name__ == "__main__":

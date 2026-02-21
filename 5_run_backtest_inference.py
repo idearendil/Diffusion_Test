@@ -4,6 +4,7 @@ from pathlib import Path
 from tqdm import tqdm
 import calendar
 import numpy as np
+import pickle
 
 from utils import list_tickers
 from model_regression import RegressionTransformer   # ← 네가 말한 모델
@@ -58,30 +59,20 @@ def load_test_tensor(split_dir: Path, tickers):
     return X
 
 
-def load_ensemble_weights(date):
+def load_ensemble_weights(date_idx):
     """
     date: '2020-01-01'
     return: dict {seed: weight}
     """
-    metrics_path = BASE_DIR / "regression_runs" / date / "metrics.csv"
-    if not metrics_path.exists():
-        raise FileNotFoundError(f"Missing metrics.csv for {date}")
-
-    df = pd.read_csv(metrics_path)
-
-    # seed별 val_exp 최대값
-    weights = (
-        df.groupby("seed")["val_exp"]
-        .max()
-        .to_dict()
-    )
+    ensemble_weights_path = BASE_DIR / "regression_runs" / "ensemble_weights.pkl"
+    weights = pickle.load(open(ensemble_weights_path, "rb"))
 
     # 음수 방지 + 정규화
-    w = np.array(list(weights.values()), dtype=np.float64)
+    w = np.array(weights[date_idx], dtype=np.float64)
     w = np.clip(w, 0.0, None)
     w = w / (w.sum() + 1e-8)
 
-    return dict(zip(weights.keys(), w))
+    return w
 
 
 # =========================
@@ -105,7 +96,7 @@ def run_ensemble(models, X, weights):
 def main():
     date_dirs = sorted([d for d in TENSOR_ROOT.iterdir() if d.is_dir()])
 
-    for date_dir in date_dirs:
+    for date_idx, date_dir in enumerate(date_dirs):
         date = date_dir.name
         print(f"\n===== Inference {date} =====")
 
@@ -130,7 +121,7 @@ def main():
         # -------------------------
         # Load models
         # -------------------------
-        ensemble_weights = load_ensemble_weights(date)
+        ensemble_weights = load_ensemble_weights(date_idx)
 
         models = []
         for seed in SEEDS:
