@@ -117,6 +117,12 @@ def topk_pairwise_loss_v2(
 
     return total_loss / (total_weight + eps)
 
+def weighted_mse_loss(y_hat, y_norm, predictable):
+    y_union = (y_norm + y_hat).detach()
+    y_union_max = torch.max(y_union, dim=1, keepdim=True)[0]
+    y_union_min = torch.min(y_union, dim=1, keepdim=True)[0]
+    weight = (y_union - y_union_min) / (y_union_max - y_union_min + 1e-8)
+    return ((y_hat - y_norm) ** 2 * predictable * weight).sum() / ((predictable * weight).sum() + 1e-8)
 
 def weighted_ensemble(preds: List[torch.Tensor], weights: List[float]):
     w = torch.tensor(weights, device=preds[0].device)
@@ -151,7 +157,8 @@ def evaluate(model, loader):
         y_hat = model(x)
 
         # loss = topk_pairwise_loss_v2(y_norm, y_hat, predictable) * EXP_LOSS_WEIGHT
-        loss = ((y_hat - y_norm) ** 2 * predictable).sum() / (predictable.sum() + 1e-8)
+        loss = weighted_mse_loss(y_hat, y_norm, predictable)
+        # loss = ((y_hat - y_norm) ** 2 * predictable).sum() / (predictable.sum() + 1e-8)
 
         totals[0] += loss.item()
 
@@ -197,7 +204,8 @@ def evaluate_ensemble(models, weights, loader):
         y_hat = weighted_ensemble(preds, weights)
 
         # loss = topk_pairwise_loss_v2(y_norm, y_hat, predictable) * EXP_LOSS_WEIGHT
-        loss = ((y_hat - y_norm) ** 2 * predictable).sum() / (predictable.sum() + 1e-8)
+        loss = weighted_mse_loss(y_hat, y_norm, predictable)
+        # loss = ((y_hat - y_norm) ** 2 * predictable).sum() / (predictable.sum() + 1e-8)
 
         totals[0] += loss.item()
 
@@ -249,7 +257,8 @@ def train_one_epoch(model, loader, optimizer, scaler, scheduler, epoch, epoch_ma
             y_hat = model(x)
 
             # loss = topk_pairwise_loss_v2(y_norm, y_hat, predictable) * EXP_LOSS_WEIGHT
-            loss = ((y_hat - y_norm) ** 2 * predictable).sum() / (predictable.sum() + 1e-8)
+            loss = weighted_mse_loss(y_hat, y_norm, predictable)
+            # loss = ((y_hat - y_norm) ** 2 * predictable).sum() / (predictable.sum() + 1e-8)
 
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
