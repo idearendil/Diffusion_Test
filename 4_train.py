@@ -391,7 +391,6 @@ def main():
         for m in best_models:
             del m
         best_models.clear()
-        best_scores.clear()
 
         torch.cuda.empty_cache()
 
