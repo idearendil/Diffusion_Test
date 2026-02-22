@@ -150,8 +150,8 @@ def evaluate(model, loader):
 
         y_hat = model(x)
 
-        loss = topk_pairwise_loss_v2(y_norm, y_hat, predictable) * EXP_LOSS_WEIGHT
-        # loss_mse = ((y_hat - y_norm) ** 2 * predictable).sum() / (predictable.sum() + 1e-8)
+        # loss = topk_pairwise_loss_v2(y_norm, y_hat, predictable) * EXP_LOSS_WEIGHT
+        loss = ((y_hat - y_norm) ** 2 * predictable).sum() / (predictable.sum() + 1e-8)
 
         totals[0] += loss.item()
 
@@ -196,7 +196,8 @@ def evaluate_ensemble(models, weights, loader):
         preds = [m(x) for m in models]
         y_hat = weighted_ensemble(preds, weights)
 
-        loss = topk_pairwise_loss_v2(y_norm, y_hat, predictable) * EXP_LOSS_WEIGHT
+        # loss = topk_pairwise_loss_v2(y_norm, y_hat, predictable) * EXP_LOSS_WEIGHT
+        loss = ((y_hat - y_norm) ** 2 * predictable).sum() / (predictable.sum() + 1e-8)
 
         totals[0] += loss.item()
 
@@ -247,7 +248,8 @@ def train_one_epoch(model, loader, optimizer, scaler, scheduler, epoch, epoch_ma
         with torch.amp.autocast("cuda", enabled=AMP):
             y_hat = model(x)
 
-            loss = topk_pairwise_loss_v2(y_norm, y_hat, predictable) * EXP_LOSS_WEIGHT
+            # loss = topk_pairwise_loss_v2(y_norm, y_hat, predictable) * EXP_LOSS_WEIGHT
+            loss = ((y_hat - y_norm) ** 2 * predictable).sum() / (predictable.sum() + 1e-8)
 
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
@@ -355,7 +357,7 @@ def main():
 
             model.load_state_dict(torch.load(ckpt))
             best_models.append(model)
-            best_scores.append(1.0-best_score)
+            best_scores.append(1.5-best_score)
 
         with open(LOG_CSV, "w", newline="") as f:
             writer = csv.writer(f)
