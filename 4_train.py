@@ -257,8 +257,8 @@ def train_one_epoch(model, loader, optimizer, scaler, scheduler, epoch, epoch_ma
             y_hat = model(x)
 
             # loss = topk_pairwise_loss_v2(y_norm, y_hat, predictable) * EXP_LOSS_WEIGHT
-            loss = weighted_mse_loss(y_hat, y_norm, predictable)
-            # loss = ((y_hat - y_norm) ** 2 * predictable).sum() / (predictable.sum() + 1e-8)
+            # loss = weighted_mse_loss(y_hat, y_norm, predictable)
+            loss = ((y_hat - y_norm) ** 2 * predictable).sum() / (predictable.sum() + 1e-8)
 
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
