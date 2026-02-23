@@ -32,8 +32,8 @@ TEST_BATCH_SIZE = 2048
 
 EXP_LOSS_WEIGHT = 1.0
 VAR_LOSS_WEIGHT = 0.0
-MAX_EPOCHS_RATE = 50 * 1000
-MIN_EPOCHS_RATE = 0.6
+MAX_EPOCHS_RATE = 50 * 1500
+MIN_EPOCHS_RATE = 0.0
 LR = 2e-4
 WEIGHT_DECAY = 1e-4
 GRAD_CLIP = 1.0
@@ -124,6 +124,22 @@ def weighted_mse_loss(y_hat, y_norm, predictable):
     weight = (y_union - y_union_min) / (y_union_max - y_union_min + 1e-8)
     return ((y_hat - y_norm) ** 2 * predictable * weight).sum() / ((predictable * weight).sum() + 1e-8)
 
+def topk_mse_loss(y_hat, y_norm, predictable, top_k=5):
+
+    B, N = y_hat.shape
+
+    topk_hat = torch.topk(y_hat, k=top_k, dim=1).indices      # (B, 5)
+    topk_norm = torch.topk(y_norm, k=top_k, dim=1).indices    # (B, 5)
+
+    mask = torch.zeros(B, N, device=y_hat.device)
+    batch_idx = torch.arange(B, device=y_hat.device).unsqueeze(1)
+
+    mask[batch_idx, topk_hat] = 1
+    mask[batch_idx, topk_norm] = 1
+
+    return ((y_hat - y_norm) ** 2 * predictable * mask).sum() / ((predictable * mask).sum() + 1e-8)
+
+
 def weighted_ensemble(preds: List[torch.Tensor], weights: List[float]):
     w = torch.tensor(weights, device=preds[0].device)
     w = torch.clamp(w, min=0.0)
@@ -157,7 +173,7 @@ def evaluate(model, loader):
         y_hat = model(x)
 
         # loss = topk_pairwise_loss_v2(y_norm, y_hat, predictable) * EXP_LOSS_WEIGHT
-        loss = weighted_mse_loss(y_hat, y_norm, predictable)
+        loss = topk_mse_loss(y_hat, y_norm, predictable)
         # loss = ((y_hat - y_norm) ** 2 * predictable).sum() / (predictable.sum() + 1e-8)
 
         totals[0] += loss.item()
@@ -204,7 +220,7 @@ def evaluate_ensemble(models, weights, loader):
         y_hat = weighted_ensemble(preds, weights)
 
         # loss = topk_pairwise_loss_v2(y_norm, y_hat, predictable) * EXP_LOSS_WEIGHT
-        loss = weighted_mse_loss(y_hat, y_norm, predictable)
+        loss = topk_mse_loss(y_hat, y_norm, predictable)
         # loss = ((y_hat - y_norm) ** 2 * predictable).sum() / (predictable.sum() + 1e-8)
 
         totals[0] += loss.item()
@@ -257,7 +273,7 @@ def train_one_epoch(model, loader, optimizer, scaler, scheduler, epoch, epoch_ma
             y_hat = model(x)
 
             # loss = topk_pairwise_loss_v2(y_norm, y_hat, predictable) * EXP_LOSS_WEIGHT
-            # loss = weighted_mse_loss(y_hat, y_norm, predictable)
+            # loss = topk_mse_loss(y_hat, y_norm, predictable)
             loss = ((y_hat - y_norm) ** 2 * predictable).sum() / (predictable.sum() + 1e-8)
 
         scaler.scale(loss).backward()
