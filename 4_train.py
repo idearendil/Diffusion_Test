@@ -382,7 +382,7 @@ def main():
 
             model.load_state_dict(torch.load(ckpt))
             best_models.append(model)
-            best_scores.append(1.5-best_score)
+            best_scores.append(50.0-best_score)
 
         with open(LOG_CSV, "w", newline="") as f:
             writer = csv.writer(f)
