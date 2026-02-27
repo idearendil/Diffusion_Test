@@ -1,107 +1,68 @@
 from pykrx import stock
-import os
+from datetime import datetime, timedelta
 from tqdm import tqdm
-import FinanceDataReader as fdr
 import time
+import os
 import pandas as pd
 
-stocks = fdr.StockListing('KOSPI', '2026-01-01')
-stock_lst = list(stocks['Code'])
+start_date = datetime(2013, 10, 24)
+end_date = datetime(2025, 12, 31)
+
+date_list = []
+current_date = start_date
+
+while current_date <= end_date:
+    date_list.append(current_date.strftime("%Y%m%d"))
+    current_date += timedelta(days=30)
+
+tickers = set()
+for a_date in tqdm(date_list):
+    tickers_temp = stock.get_market_ticker_list(a_date, market="KOSPI")
+    time.sleep(0.1)
+    tickers = set(tickers).union(set(tickers_temp))
+
+tickers = list(tickers)
+print(len(tickers))
 
 out_dir = "raw_data/"
 os.makedirs(out_dir, exist_ok=True)
 
-REMOVED_TICKERS = [
-    '450140',
-    '010620',
-    '102280',
-    '006390',
-    '091090',
-    '005390',
-    '010420',
-    '093230',
-    '049770',
-    '012600',
-    '168490',
-    '034300',
-    '115390',
-    '282690',
-    '003410',
-    '030790',
-    '001880',
-    '068400',
-    '380440',
-    '155900',
-    '015540',
-    '010050',
-    '008560',
-    '000060',
-    '096300',
-    '280360',
-    '153360',
-    '138250',
-    '007630',
-    '015350',
-    '101060',
-    '172580',
-    '144620',
-    '033660',
-    '102260',
-    '152330',
-    '004200',
-    '027970',
-    '099350',
-    '099340',
-    '055550',
-    '083370',
-    '103130',
-    '083380',
-    '159650',
-    '027390',
-    '011160',
-    '079440',
-    '079660',
-    '002250',
-    '140890',
-    '000030',
-    '004130',
-    '002000',
-    '192530',
-    '005980',
-    '008000',
-    '900050',
-    '005620',
-    '083620',
-    '021960',
-    '002550',
-    '004740',
-    '083610',
-    '083600',
-    '083590',
-    '083580',
-    '083570',
-    '083390',
-    '083360',
-    '083350',
-    '091000',
-    '090990',
-    '090980',
-    '090970',
-    '110570',
-    '213500',
-    '117930',
-    '006800',
-    '068870',
-    '011930',
-    '104120',
-    '011720',
-    '007310'
+existing_csvs = [
+    f for f in os.listdir(out_dir)
+    if f.endswith(".csv")
 ]
-stock_lst = stock_lst + REMOVED_TICKERS
 
-print(len(stock_lst))
-for a_stock in tqdm(stock_lst):
-    df = stock.get_market_ohlcv("20060101", "20251231", a_stock)
-    time.sleep(0.1)
+print(f"Existing CSVs: {len(existing_csvs)}, ex: {existing_csvs[0]}")
+
+start_date_str = start_date.strftime("%Y%m%d")
+end_date_str = end_date.strftime("%Y%m%d")
+
+for a_ticker in tqdm(tickers):
+    if a_ticker + ".csv" in existing_csvs:
+        continue
+    df_1 = stock.get_market_ohlcv(start_date_str, end_date_str, a_ticker)
+    time.sleep(1)
+    df_2 = stock.get_market_trading_value_by_date(start_date_str, end_date_str, a_ticker, on="매수")
+    if len(df_2) == 0:
+        continue
+    df_2 = df_2.rename(columns={
+            '기관합계': '매수_기관합계',
+            '기타법인': '매수_기타법인',
+            '개인': '매수_개인',
+            '외국인합계': '매수_외국인합계',
+        })
+    df_2.drop(columns=['전체'], inplace=True)
+    time.sleep(1)
+    df_3 = stock.get_market_trading_value_by_date(start_date_str, end_date_str, a_ticker, on="매도")
+    if len(df_3) == 0:
+        continue
+    df_3 = df_3.rename(columns={
+            '기관합계': '매도_기관합계',
+            '기타법인': '매도_기타법인',
+            '개인': '매도_개인',
+            '외국인합계': '매도_외국인합계',
+        })
+    time.sleep(1)
+    df = pd.concat([df_1, df_2, df_3], axis=1)
     df.index = pd.to_datetime(df.index)
-    df.to_csv(out_dir + f"{a_stock}.csv", encoding="utf-8-sig")
+    df.to_csv(out_dir + f"{a_ticker}.csv", encoding="utf-8-sig")

@@ -19,7 +19,9 @@ OPEN_COL = "시가"
 HIGH_COL = "고가"
 LOW_COL = "저가"
 CLOSE_COL = "종가"
-VOLUME_COL = "거래량"
+VOLUME_COL = "전체"
+
+INVESTORS_COL = ["기관합계", "기타법인", "개인", "외국인합계"]
 
 LABEL_COL = "label1"
 CHANGE_RATE_COL = "ret_pct"  # 종가 기준 일간 수익률(%)
@@ -141,8 +143,7 @@ def add_features_and_labels(df: pd.DataFrame, ticker: str) -> pd.DataFrame:
     df[CHANGE_RATE_COL] = (df[CLOSE_COL] / (df[CLOSE_COL].shift(1) + 1e-12) - 1.0) * 100.0
 
     # 1) 거래량 = 거래량 * 시가 (원 코드 유지)
-    # df[VOLUME_COL] = df[VOLUME_COL] * df[OPEN_COL]
-    df["vol_log"] = np.log(df[VOLUME_COL] * df[OPEN_COL] + 1.0)
+    df["vol_log"] = np.log(df[VOLUME_COL] + 1.0)
     df["vol_log_ma_5"] = df["vol_log"].rolling(window=5, min_periods=3).mean()
     df["vol_log_ma_20"] = df["vol_log"].rolling(window=20, min_periods=6).mean()
     df["vol_log_ma_60"] = df["vol_log"].rolling(window=60, min_periods=20).mean()
@@ -246,6 +247,37 @@ def add_features_and_labels(df: pd.DataFrame, ticker: str) -> pd.DataFrame:
     df["vpt"] = ((df[CLOSE_COL] - df[CLOSE_COL].shift(1)) /
              (df[CLOSE_COL].shift(1) + 1e-6) * df[VOLUME_COL]).cumsum()
 
+    # 투자자 유형별 feature 처리
+    for c in INVESTORS_COL:
+        df = df.copy()
+        volume_col = f"{c}_거래량"
+        netbuy_col = f"{c}_순매수"
+        df[volume_col] = df[f"매수_{c}"] + df[f"매도_{c}"]
+        df[netbuy_col] = df[f"매수_{c}"] - df[f"매도_{c}"]
+        df.drop(columns=[f"매수_{c}", f"매도_{c}"], inplace=True)
+
+        df[volume_col + "_log"] = np.log(df[volume_col] + 1.0)
+        df[volume_col + "_log_ma_5"] = df[volume_col + "_log"].rolling(window=5, min_periods=3).mean()
+        df[volume_col + "_log_ma_20"] = df[volume_col + "_log"].rolling(window=20, min_periods=6).mean()
+        df[volume_col + "_log_ma_60"] = df[volume_col + "_log"].rolling(window=60, min_periods=20).mean()
+        df[volume_col + "_ma_5"] = df[volume_col].rolling(window=5, min_periods=3).mean()
+        df[volume_col + "_ma_20"] = df[volume_col].rolling(window=20, min_periods=6).mean()
+        df[volume_col + "_ma_60"] = df[volume_col].rolling(window=60, min_periods=20).mean()
+        df[volume_col + "_ratio_5"] = np.log(df[volume_col] / (df[volume_col + "_ma_5"] + 1.0) + 1.0)
+        df[volume_col + "_ratio_20"] = np.log(df[volume_col] / (df[volume_col + "_ma_20"] + 1.0) + 1.0)
+        df[volume_col + "_ratio_60"] = np.log(df[volume_col] / (df[volume_col + "_ma_60"] + 1.0) + 1.0)
+        df[volume_col + "_diff"] = df[volume_col] / (df[volume_col].shift(1) + 1.0)
+        df[volume_col + "_diff"] = np.log(np.clip(df[volume_col + "_diff"].values, 0.0, 10.0) + 1.0)
+        df[volume_col + "_diff_ma_5"] = df[volume_col + "_diff"].diff().rolling(window=5, min_periods=3).mean()
+        df[volume_col + "_diff_ma_20"] = df[volume_col + "_diff"].diff().rolling(window=20, min_periods=6).mean()
+        df[volume_col + "_diff_ma_60"] = df[volume_col + "_diff"].diff().rolling(window=60, min_periods=20).mean()
+
+        df.drop(columns=[volume_col + "_ma_5", volume_col + "_ma_20", volume_col + "_ma_60"], inplace=True)
+
+        df[netbuy_col + "_ma_5"] = df[netbuy_col].rolling(window=5, min_periods=3).mean()
+        df[netbuy_col + "_ma_20"] = df[netbuy_col].rolling(window=20, min_periods=6).mean()
+        df[netbuy_col + "_ma_60"] = df[netbuy_col].rolling(window=60, min_periods=20).mean()
+
     # ===== Label =====
     df[LABEL_COL] = (df[CLOSE_COL].shift(-1) / df[CLOSE_COL] - 1) * 10.0
 
@@ -275,7 +307,7 @@ def prepare_full_dfs() -> Tuple[Dict[str, pd.DataFrame], List[str]]:
         df = add_features_and_labels(tmp, ticker)
 
         # 원본 컬럼 drop (DATE_COL은 유지해야 월별 필터링 가능)
-        df = df.drop(columns=[OPEN_COL, CLOSE_COL, HIGH_COL, LOW_COL, VOLUME_COL, "vol_ma_5", "vol_ma_20", "vol_ma_60"], errors="ignore")
+        df = df.drop(columns=[OPEN_COL, CLOSE_COL, HIGH_COL, LOW_COL, VOLUME_COL, "거래량", "전체", "vol_ma_5", "vol_ma_20", "vol_ma_60"], errors="ignore")
 
         # clip
         df = clip_features(df)
@@ -307,7 +339,7 @@ def build_monthly_backtest_datasets():
     month_starts = pd.date_range(TEST_START, TEST_END, freq="MS")
     one_year_before = month_starts - pd.DateOffset(years=1)
     # last_tag = month_starts[-1].strftime("%Y-%m-%d")
-    last_tag = "2026-01-01"
+    last_tag = "2025-12-01"
 
     for test_start, train_start in zip(month_starts, one_year_before):
         test_end = (test_start + pd.offsets.MonthEnd(1))

@@ -18,6 +18,8 @@ DROP_COLS = ["등락률"]
 # 원본에 존재할 컬럼들
 PRICE_COLS = ["시가", "고가", "저가", "종가"]
 VOL_COL = "거래량"
+BUY_COLS = ["매수_기관합계", "매수_기타법인", "매수_개인", "매수_외국인합계"]
+SELL_COLS = ["매도_기관합계", "매도_기타법인", "매도_개인", "매도_외국인합계", "전체"]
 
 # 보간/ffill/bfill을 수행할 컬럼 (요청사항)
 INTERP_COLS = ["시가", "거래량"]
@@ -73,22 +75,32 @@ def preprocess_one_csv(in_path: str, out_path: str, cal_dates: pd.DatetimeIndex)
     df = df.set_index(DATE_COL)
 
     # 필요한 컬럼들 존재 체크/생성 + numeric 변환
-    for c in PRICE_COLS + [VOL_COL]:
+    for c in PRICE_COLS + [VOL_COL] + BUY_COLS + SELL_COLS:
         if c not in df.columns:
             df[c] = np.nan
         df[c] = pd.to_numeric(df[c], errors="coerce")
 
     df = df.reindex(cal_dates)
 
+    if df["시가"].count() == 0:
+        print(f"No data for {in_path}")
+        return
+    
+    # 날짜 컬럼을 제외한 컬럼들은 float32로 변환
+    cols = df.columns.difference([DATE_COL])
+    df[cols] = df[cols].astype('float32')
+
     # 보간 필요 여부(= predictable==0의 근거) 판단은
-    # "시가/거래량 중 하나라도 NaN" 또는 "시가==0" 이면 보간 필요로 잡는 게 자연스러움
+    # "시가/거래량 중 하나라도 NaN" 또는 "시가/거래량 중 하나라도 0" 이면 보간 필요로 잡는 게 자연스러움
     created_missing = df[INTERP_COLS].isna().any(axis=1)
 
-    # 시가==0인 행: (날짜 제외) 시가/거래량을 NaN 처리 -> 보간 대상으로
+    # 시가/거래량 중 하나라도 0인 행: (날짜 제외) 시가/거래량을 NaN 처리 -> 보간 대상으로
     open_zero_mask = df["시가"].fillna(np.nan).eq(0)
     df.loc[open_zero_mask, INTERP_COLS] = np.nan
+    trade_zero_mask = df["거래량"].fillna(np.nan).eq(0)
+    df.loc[trade_zero_mask, INTERP_COLS] = np.nan
 
-    interpolation_needed = created_missing | open_zero_mask
+    interpolation_needed = created_missing | open_zero_mask | trade_zero_mask
 
     # 1) 시가/거래량만 time 보간
     df[INTERP_COLS] = df[INTERP_COLS].interpolate(method="time")
@@ -96,10 +108,19 @@ def preprocess_one_csv(in_path: str, out_path: str, cal_dates: pd.DatetimeIndex)
     # 2) 양 끝 NaN은 시가/거래량만 bfill/ffill
     df[INTERP_COLS] = df[INTERP_COLS].bfill().ffill()
 
-    # 3) 고가/저가/종가는 항상 시가와 동일하게 강제
-    df["고가"] = df["고가"].fillna(df["시가"])
-    df["저가"] = df["저가"].fillna(df["시가"])
-    df["종가"] = df["종가"].fillna(df["시가"])
+    # 3) 고가/저가/종가/매수량/매도량은 항상 시가와 동일하게 강제
+    df.loc[interpolation_needed, "고가"] = df["시가"]
+    df.loc[interpolation_needed, "저가"] = df["시가"]
+    df.loc[interpolation_needed, "종가"] = df["시가"]
+    df.loc[interpolation_needed, BUY_COLS] = 0
+    df.loc[interpolation_needed, SELL_COLS] = 0
+
+    # BUY_COLS, SELL_COLS는 1행씩 앞으로 당기기
+    df[BUY_COLS] = df[BUY_COLS].shift(1)
+    df[SELL_COLS] = df[SELL_COLS].shift(1)
+
+    # 전체 종가 보간 시 NaN은 0으로 대체 + 마지막으로 남아있는 nan값들 0으로 대체
+    df[BUY_COLS + SELL_COLS] = df[BUY_COLS + SELL_COLS].fillna(0)
 
     # predictable: 보간이 필요했던 날은 0, 나머지 1
     predictable = (~interpolation_needed).astype(int)

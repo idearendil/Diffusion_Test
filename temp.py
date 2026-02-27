@@ -1,25 +1,23 @@
-import shutil
-from pathlib import Path
-import pandas as pd
-from tqdm import tqdm
+import os
+import torch
 
-# =========================
-# 설정
-# =========================
-SRC_DIR = Path("backtest/true_regression_runs/2025-01-01")      # 복사할 원본 폴더
-DEST_ROOT = Path("backtest/regression_runs")    # 붙여넣을 상위 폴더
+target_dir = "backtest/tensor_data/2020-01-01/train"
 
-DEST_ROOT.mkdir(parents=True, exist_ok=True)
+shape_dict = {}
 
-# =========================
-# 2020-01-01 ~ 2025-12-01 (72개월)
-# =========================
-dates = pd.date_range("2020-01-01", "2025-12-01", freq="MS")
+for filename in os.listdir(target_dir):
+    if filename.endswith("_x.pt"):
+        file_path = os.path.join(target_dir, filename)
+        tensor = torch.load(file_path, map_location="cpu")
+        shape_dict[filename] = tuple(tensor.shape)
 
-for d in tqdm(dates):
-    dest_dir = DEST_ROOT / d.strftime("%Y-%m-%d")
-    
-    # 이미 존재하면 덮어쓰기 (Python 3.8+)
-    shutil.copytree(SRC_DIR, dest_dir, dirs_exist_ok=True)
+if shape_dict:
+    filenames = list(shape_dict.keys())
+    standard_shape = shape_dict[filenames[0]]
 
-print("완료: 72개 폴더 생성됨")
+    print(f"Standard shape (first file): {standard_shape}\n")
+    print("Files with different shape:")
+
+    for filename, shape in shape_dict.items():
+        if shape != standard_shape:
+            print(f"{filename} → shape: {shape}")
