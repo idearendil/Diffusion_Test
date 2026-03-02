@@ -112,15 +112,19 @@ def preprocess_one_csv(in_path: str, out_path: str, cal_dates: pd.DatetimeIndex)
     df.loc[interpolation_needed, "고가"] = df["시가"]
     df.loc[interpolation_needed, "저가"] = df["시가"]
     df.loc[interpolation_needed, "종가"] = df["시가"]
-    df.loc[interpolation_needed, BUY_COLS] = 0
-    df.loc[interpolation_needed, SELL_COLS] = 0
+
+    # 4) 투자자별 매수/매도 값들도 보간
+    df.loc[interpolation_needed, BUY_COLS] = np.nan
+    df.loc[interpolation_needed, SELL_COLS] = np.nan
+    df[BUY_COLS] = df[BUY_COLS].interpolate(method="time")
+    df[SELL_COLS] = df[SELL_COLS].interpolate(method="time")
+    df[BUY_COLS] = df[BUY_COLS].bfill().ffill()
+    df[SELL_COLS] = df[SELL_COLS].bfill().ffill()
 
     # BUY_COLS, SELL_COLS는 1행씩 앞으로 당기기
     df[BUY_COLS] = df[BUY_COLS].shift(1)
     df[SELL_COLS] = df[SELL_COLS].shift(1)
-
-    # 전체 종가 보간 시 NaN은 0으로 대체 + 마지막으로 남아있는 nan값들 0으로 대체
-    df[BUY_COLS + SELL_COLS] = df[BUY_COLS + SELL_COLS].fillna(0)
+    df[BUY_COLS + SELL_COLS] = df[BUY_COLS + SELL_COLS].bfill().ffill()
 
     # predictable: 보간이 필요했던 날은 0, 나머지 1
     predictable = (~interpolation_needed).astype(int)
