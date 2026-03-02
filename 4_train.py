@@ -25,13 +25,12 @@ BASE_OUT_ROOT.mkdir(parents=True, exist_ok=True)
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-SEEDS = list(range(3))
+SEEDS = list(range(6))
 
 TRAIN_BATCH_SIZE = 16
 TEST_BATCH_SIZE = 2048
 
 EXP_LOSS_WEIGHT = 1.0
-VAR_LOSS_WEIGHT = 0.0
 MAX_EPOCHS_RATE = 50 * 800
 MIN_EPOCHS_RATE = 0.6
 LR = 2e-4
@@ -81,18 +80,12 @@ def weighted_ensemble(preds: List[torch.Tensor], weights: List[float]):
 def evaluate(model, loader):
     model.eval()
 
-    totals = [0.0] * 9
+    totals = [0.0] * 3
     n_batches = 0
 
     for x, y in loader:
         x, y = x.to(DEVICE), y.to(DEVICE)
         mask = (x[:, :, 0] != 0).float()
-
-        # valid_count = mask.sum(dim=1, keepdim=True).clamp(min=1)
-        # mean = (y * mask).sum(dim=1, keepdim=True) / valid_count
-        # var = ((y - mean) * mask).pow(2).sum(dim=1, keepdim=True) / valid_count
-        # std = var.sqrt().clamp(min=1e-6)
-        # y_norm = (y - mean) / std
 
         y_hat, confi = model(x)
 
@@ -100,8 +93,6 @@ def evaluate(model, loader):
         masked_confi = confi * mask
         masked_confi = masked_confi / masked_confi.sum(dim=1, keepdim=True)
 
-        # loss_mse = ((y_hat - y_norm) ** 2 * mask).sum() / (mask.sum() + 1e-8)
-        # loss_exp = torch.sum(y * masked_confi, dim=1).mean()
         loss_bin = (
             F.binary_cross_entropy_with_logits(
                 y_hat,
@@ -109,44 +100,20 @@ def evaluate(model, loader):
                 reduction='none'
             ) * mask
         ).sum() / (mask.sum() + 1e-8)
-        loss_var = torch.sum(y * masked_confi, dim=1).var()
 
-        loss = loss_bin * EXP_LOSS_WEIGHT + loss_var * VAR_LOSS_WEIGHT
-        totals[8] += loss.item()
-        totals[2] += loss_bin.item()
-        # totals[3] += loss_var.item()
+        loss = loss_bin * EXP_LOSS_WEIGHT
+        totals[0] += loss.item()
+        totals[1] += loss_bin.item()
 
         # evaluate complimental curves
         y_hat *= mask
 
-        _, topk = torch.topk(y_hat, k=3, dim=1)
+        _, topk = torch.topk(y_hat, k=5, dim=1)
         clipped = torch.zeros_like(y_hat)
         clipped.scatter_(1, topk, 1.0)
-
-        # mask only
-        diff = (y_hat - y) * mask
-        denom = mask.sum() + 1e-8
-
-        rmse = torch.sqrt(diff.pow(2).sum() / denom)
-        mae  = diff.abs().sum() / denom
-
-        totals[0] += rmse.item()
-        totals[1] += mae.item()
-
-        # confi
-        diff = (y_hat - y) * clipped
-        denom1 = clipped.sum() + 1e-8
-        denom2 = torch.sum(clipped, dim=1).mean() + 1e-8
-
-        rmse = torch.sqrt(diff.pow(2).sum() / denom1)
-        mae  = diff.abs().sum() / denom1
-        exp  = (torch.sum(y * clipped, dim=1) / denom2).mean()
-        var  = (torch.sum(y * clipped, dim=1) / denom2).var()
-
-        totals[4] += rmse.item()
-        totals[5] += mae.item()
-        totals[6] += exp.item()
-        totals[7] += var.item()
+        denom = torch.sum(clipped, dim=1).mean() + 1e-8
+        exp  = (torch.sum(y * clipped, dim=1) / denom).mean()
+        totals[2] += exp.item()
 
         n_batches += 1
 
@@ -158,18 +125,12 @@ def evaluate_ensemble(models, weights, loader):
     for m in models:
         m.eval()
 
-    totals = [0.0] * 9
+    totals = [0.0] * 3
     n_batches = 0
 
     for x, y in loader:
         x, y = x.to(DEVICE), y.to(DEVICE)
         mask = (x[:, :, 0] != 0).float()
-
-        # valid_count = mask.sum(dim=1, keepdim=True).clamp(min=1)
-        # mean = (y * mask).sum(dim=1, keepdim=True) / valid_count
-        # var = ((y - mean) * mask).pow(2).sum(dim=1, keepdim=True) / valid_count
-        # std = var.sqrt().clamp(min=1e-6)
-        # y_norm = (y - mean) / std
 
         preds = [torch.stack(m(x)) for m in models]
         y_hat, confi = weighted_ensemble(preds, weights)
@@ -178,8 +139,6 @@ def evaluate_ensemble(models, weights, loader):
         masked_confi = confi * mask
         masked_confi = masked_confi / (masked_confi.sum(dim=1, keepdim=True) + 1e-8)
 
-        # loss_mse = ((y_hat - y_norm) ** 2 * mask).sum() / (mask.sum() + 1e-8)
-        # loss_exp = torch.sum(y * masked_confi, dim=1).mean()
         loss_bin = (
             F.binary_cross_entropy_with_logits(
                 y_hat,
@@ -187,13 +146,11 @@ def evaluate_ensemble(models, weights, loader):
                 reduction='none'
             ) * mask
         ).sum() / (mask.sum() + 1e-8)
-        loss_var = torch.sum(y * masked_confi, dim=1).var()
 
-        loss = loss_bin * EXP_LOSS_WEIGHT + loss_var * VAR_LOSS_WEIGHT
+        loss = loss_bin * EXP_LOSS_WEIGHT
         
-        totals[8] += loss.item()
-        totals[2] += loss_bin.item()
-        totals[3] += loss_var.item()
+        totals[0] += loss.item()
+        totals[1] += loss_bin.item()
 
         # evaluate complimental curves
         y_hat *= mask
@@ -201,31 +158,9 @@ def evaluate_ensemble(models, weights, loader):
         _, topk = torch.topk(y_hat, k=5, dim=1)
         clipped = torch.zeros_like(y_hat)
         clipped.scatter_(1, topk, 1.0)
-
-        diff = (y_hat - y) * mask
-        denom = mask.sum() + 1e-8
-
-        rmse = torch.sqrt(diff.pow(2).sum() / denom)
-        mae  = diff.abs().sum() / denom
-        exp  = (torch.sum(y * mask, dim=1) / denom).mean()
-        var  = (torch.sum(y * mask, dim=1) / denom).var()
-
-        totals[0] += rmse.item()
-        totals[1] += mae.item()
-
-        diff = (y_hat - y) * clipped
-        denom1 = clipped.sum() + 1e-8
-        denom2 = torch.sum(clipped, dim=1).mean() + 1e-8
-
-        rmse = torch.sqrt(diff.pow(2).sum() / denom1)
-        mae  = diff.abs().sum() / denom1
-        exp  = (torch.sum(y * clipped, dim=1) / denom2).mean()
-        var  = (torch.sum(y * clipped, dim=1) / denom2).var()
-
-        totals[4] += rmse.item()
-        totals[5] += mae.item()
-        totals[6] += exp.item()
-        totals[7] += var.item()
+        denom = torch.sum(clipped, dim=1).mean() + 1e-8
+        exp  = (torch.sum(y * clipped, dim=1) / denom).mean()
+        totals[2] += exp.item()
 
         n_batches += 1
 
@@ -271,9 +206,8 @@ def train_one_epoch(model, loader, optimizer, scaler, scheduler, epoch, epoch_ma
                     reduction='none'
                 ) * predictable
             ).sum() / (predictable.sum() + 1e-8)
-            loss_var = torch.sum(y * masked_confi, dim=1).var()
 
-            loss = loss_bin * EXP_LOSS_WEIGHT + loss_var * VAR_LOSS_WEIGHT
+            loss = loss_bin * EXP_LOSS_WEIGHT
 
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
@@ -374,8 +308,8 @@ def main():
                 if epoch > 1:
                     csv_rows.append([seed, epoch, train_loss, *vals, optimizer.param_groups[0]["lr"]])
 
-                if vals[2] < best_score and epoch > epoch_max * MIN_EPOCHS_RATE:
-                    best_score = vals[2]
+                if vals[0] < best_score and epoch > epoch_max * MIN_EPOCHS_RATE:
+                    best_score = vals[0]
                     torch.save(model.state_dict(), ckpt)
 
             model.load_state_dict(torch.load(ckpt))
@@ -386,9 +320,7 @@ def main():
             writer = csv.writer(f)
             writer.writerow([
                 "seed", "epoch", "train_loss",
-                "val_rmse", "val_mae", "val_exp", "val_var",
-                "val_confi_rmse", "val_confi_mae", "val_confi_exp", "val_confi_var",
-                "val_loss", "lr"
+                "val_loss", "val_bin_loss", "val_confi_exp", "lr"
             ])
             writer.writerows(csv_rows)
 
@@ -398,7 +330,7 @@ def main():
         import pandas as pd
         df = pd.read_csv(LOG_CSV)
 
-        for col in ["train_loss", "val_rmse", "val_mae", "val_exp", "val_var", "val_confi_rmse", "val_confi_mae", "val_confi_exp", "val_confi_var", "val_loss"]:
+        for col in ["train_loss", "val_loss", "val_bin_loss", "val_confi_exp", "lr"]:
             plt.figure()
             for seed in SEEDS:
                 d = df[df.seed == seed]
@@ -409,7 +341,7 @@ def main():
             plt.close()
 
         test_vals = evaluate_ensemble(best_models, best_scores, test_loader)
-        print(f"[{date} Ensemble Test] | mse_loss: {test_vals[8]}, exp5: {test_vals[6]}")
+        print(f"[{date} Ensemble Test] | bin_loss: {test_vals[1]}, exp5: {test_vals[2]}")
         test_val_lst.append(test_vals)
 
         # 🔥 GPU 메모리 정리

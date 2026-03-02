@@ -21,7 +21,7 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 START_SEED_MONEY = 1_000_000.0   # 시작 자금 (원, 단위 자유)
 TOP_K = 5                        # 하루에 매매할 종목 개수
 PRE_SELECTED_TOLERANCE = 0.0     # 전날에 매수한 종목을 그대로 유지할지를 결정
-BUY_THRESHOLD = 0.53             # 예측값이 1차적으로 이 값을 넘어야 매수
+BUY_THRESHOLD = 0.51             # 예측값이 1차적으로 이 값을 넘어야 매수
 HALT_THRESHOLD = 0.0            # 한 달의 수익률이 이보다 낮으면 그 달은 skip
 
 # =========================
@@ -165,8 +165,8 @@ def main():
     # 2차원 리스트에서 index 7 값만 추출 → 1차원 시계열
     test_series = []
     for row in test_val_lst:
-        test_series += [row[6]] * 20
-    test_series += [test_val_lst[-1][6]] * 33
+        test_series += [row[2]] * 20
+    test_series += [test_val_lst[-1][2]] * 33
 
     fig, ax1 = plt.subplots(figsize=(10, 6))
 

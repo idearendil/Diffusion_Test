@@ -71,7 +71,7 @@ def load_ensemble_weights(date):
 
     # seed별 val_exp 최대값
     weights = (
-        df.groupby("seed")["val_exp"]
+        df.groupby("seed")["val_confi_exp"]
         .max()
         .to_dict()
     )
