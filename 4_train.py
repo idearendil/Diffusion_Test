@@ -25,7 +25,7 @@ BASE_OUT_ROOT.mkdir(parents=True, exist_ok=True)
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-SEEDS = list(range(3))
+SEEDS = list(range(6))
 
 TRAIN_BATCH_SIZE = 16
 TEST_BATCH_SIZE = 2048
@@ -299,6 +299,7 @@ def main():
             )
 
             best_score = 1e9
+            ensemble_weight = -1e9
             ckpt = OUT_DIR / f"best_model_seed{seed}.pt"
 
             for epoch in range(1, epoch_max + 1):
@@ -311,10 +312,11 @@ def main():
                 if vals[0] < best_score and epoch > epoch_max * MIN_EPOCHS_RATE:
                     best_score = vals[0]
                     torch.save(model.state_dict(), ckpt)
+                ensemble_weight = max(vals[2], ensemble_weight)
 
             model.load_state_dict(torch.load(ckpt))
             best_models.append(model)
-            best_scores.append(1.5-best_score)
+            best_scores.append(ensemble_weight)
 
         with open(LOG_CSV, "w", newline="") as f:
             writer = csv.writer(f)
