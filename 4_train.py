@@ -25,7 +25,7 @@ BASE_OUT_ROOT.mkdir(parents=True, exist_ok=True)
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-SEEDS = list(range(3))
+SEEDS = [6, 7, 8]
 
 TRAIN_BATCH_SIZE = 16
 TEST_BATCH_SIZE = 2048
@@ -237,6 +237,7 @@ def main():
         DATA_ROOT = date_dir
         OUT_DIR = BASE_OUT_ROOT / date
         LOG_CSV = OUT_DIR / "metrics.csv"
+        ENSEMBLE_WEIGHTS_PATH = OUT_DIR / "ensemble_weights.pkl"
 
         if LOG_CSV.exists():
             print(f"[SKIP] {date} already trained")
@@ -342,6 +343,8 @@ def main():
             plt.savefig(OUT_DIR / f"{col}.png")
             plt.close()
 
+        with open(ENSEMBLE_WEIGHTS_PATH, "wb") as f:
+            pickle.dump(best_scores, f)
         test_vals = evaluate_ensemble(best_models, best_scores, test_loader)
         print(f"[{date} Ensemble Test] | bin_loss: {test_vals[1]}, exp5: {test_vals[2]}")
         test_val_lst.append(test_vals)

@@ -4,6 +4,7 @@ from pathlib import Path
 from tqdm import tqdm
 import calendar
 import numpy as np
+import pickle
 
 from utils import list_tickers
 from model_regression import RegressionTransformer   # ← 네가 말한 모델
@@ -21,7 +22,7 @@ REFINED_DIR = Path("refined_data")
 
 OUT_ROOT.mkdir(parents=True, exist_ok=True)
 
-SEEDS = list(range(3))
+SEEDS = [6, 7, 8]
 
 
 # =========================
@@ -63,18 +64,14 @@ def load_ensemble_weights(date):
     date: '2020-01-01'
     return: dict {seed: weight}
     """
-    metrics_path = BASE_DIR / "regression_runs" / date / "metrics.csv"
-    if not metrics_path.exists():
-        raise FileNotFoundError(f"Missing metrics.csv for {date}")
+    ensemble_weights_path = BASE_DIR / "regression_runs" / date / "ensemble_weights.pkl"
+    if not ensemble_weights_path.exists():
+        raise FileNotFoundError(f"Missing ensemble_weights.pkl for {date}")
 
-    df = pd.read_csv(metrics_path)
+    with open(ensemble_weights_path, "rb") as f:
+        weights = pickle.load(f)
 
-    # seed별 val_exp 최대값
-    weights = (
-        df.groupby("seed")["val_confi_exp"]
-        .max()
-        .to_dict()
-    )
+    weights = {k: weights[k - SEEDS[0]] for k in SEEDS}
 
     # 음수 방지 + 정규화
     w = np.array(list(weights.values()), dtype=np.float64)
@@ -91,7 +88,7 @@ def load_ensemble_weights(date):
 def run_ensemble(models, X, weights):
     preds = []
 
-    for model_id, model in enumerate(models):
+    for model_id, model in zip(SEEDS, models):
         model.eval()
         y_hat, _ = model(X)   # [T, N]
         preds.append(y_hat * weights[model_id])
