@@ -128,6 +128,8 @@ def main():
         # Load models
         # -------------------------
         ensemble_weights = load_ensemble_weights(date)
+        print(f"Ensemble weights: {ensemble_weights}")
+        ensemble_weights = {k: 1 / 3 for k in SEEDS}
 
         models = []
         for seed in SEEDS:
