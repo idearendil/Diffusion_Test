@@ -61,6 +61,16 @@ GRAD_CLIP = 1.0
 AMP = True if DEVICE == "cuda" else False
 
 
+def apply_token_mask(x, mask_ratio):
+    if mask_ratio <= 0:
+        return x
+
+    B, N, F = x.shape
+    mask = torch.rand(B, N, device=x.device) < mask_ratio
+    x = x.clone()
+    x[mask] = 0.0
+    return x
+
 # =========================
 # Sampling
 # =========================
@@ -225,6 +235,9 @@ def train_one_epoch(
         y0 = y0.to(DEVICE)
         B = x.shape[0]
 
+        mask = (x[:, :, 0] != 0).float()
+        x = apply_token_mask(x, 0.2)
+
         t = torch.randint(0, T_STEPS, (B,), device=DEVICE, dtype=torch.int64)
         eps = torch.randn_like(y0)
         y_t = sqrt_ab[t].unsqueeze(1) * y0 + sqrt_1mab[t].unsqueeze(1) * eps
@@ -235,7 +248,6 @@ def train_one_epoch(
         with torch.amp.autocast("cuda", enabled=AMP):
             v_pred = model(tokens, t)
 
-            mask = (x[:, :, 0] != 0).float()
             ab_t = alpha_bar[t]
 
             v_tgt = v_from_eps_y0(eps, y0, ab_t)
@@ -305,7 +317,6 @@ def find_backtest_runs(root: Path) -> List[Path]:
 
 def train_one_backtest_run(data_root: Path, out_dir: Path):
     """
-    기존 main() 내용을 '단일 데이터셋' 학습으로 캡슐화.
     out_dir 안에 metrics.csv, curves.png, best_model.pt 저장.
     """
     set_seed(SEED)
@@ -405,13 +416,6 @@ def train_one_backtest_run(data_root: Path, out_dir: Path):
 
         val_rmse, val_mae, val_corr, val_var = evaluate_sampling(
             model, val_loader, diffusion, sample_steps=SAMPLE_STEPS, k_samples=1, eta=DDIM_ETA
-        )
-
-        print(
-            f"[Epoch {epoch:03d}] "
-            f"train_loss={train_loss:.6f} | "
-            f"val_rmse={val_rmse:.6f} val_mae={val_mae:.6f} "
-            f"val_corr={val_corr:.4f} val_var={val_var:.6f}"
         )
 
         row = {
