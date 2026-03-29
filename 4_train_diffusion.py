@@ -171,13 +171,13 @@ def evaluate_sampling(
         # volume feature들 정규화
         # x: [B, N, F]
         # mask: [B, N]
-        feat = x[:, :, 8:12]          # [B, N, 4]
-        m = mask.unsqueeze(-1)        # [B, N, 1]
-        mean = (feat * m).sum(dim=1, keepdim=True) / (m.sum(dim=1, keepdim=True) + 1e-8)
-        var = ((feat - mean)**2 * m).sum(dim=1, keepdim=True) / (m.sum(dim=1, keepdim=True) + 1e-8)
-        std = torch.sqrt(var + 1e-8)
-        feat_norm = (feat - mean) / std
-        x[:, :, 8:12] = feat_norm   # 다시 넣기
+        # feat = x[:, :, 8:12]          # [B, N, 4]
+        # m = mask.unsqueeze(-1)        # [B, N, 1]
+        # mean = (feat * m).sum(dim=1, keepdim=True) / (m.sum(dim=1, keepdim=True) + 1e-8)
+        # var = ((feat - mean)**2 * m).sum(dim=1, keepdim=True) / (m.sum(dim=1, keepdim=True) + 1e-8)
+        # std = torch.sqrt(var + 1e-8)
+        # feat_norm = (feat - mean) / std
+        # x[:, :, 8:12] = feat_norm   # 다시 넣기
 
         t_seq = make_t_seq(T_STEPS, sample_steps, x.device)
         y0_hat, y0_var = ddim_sample_y0_kmean_var(
@@ -251,13 +251,13 @@ def train_one_epoch(
         # volume feature들 정규화
         # x: [B, N, F]
         # mask: [B, N]
-        feat = x[:, :, 8:12]          # [B, N, 4]
-        m = mask.unsqueeze(-1)        # [B, N, 1]
-        mean = (feat * m).sum(dim=1, keepdim=True) / (m.sum(dim=1, keepdim=True) + 1e-8)
-        var = ((feat - mean)**2 * m).sum(dim=1, keepdim=True) / (m.sum(dim=1, keepdim=True) + 1e-8)
-        std = torch.sqrt(var + 1e-8)
-        feat_norm = (feat - mean) / std
-        x[:, :, 8:12] = feat_norm   # 다시 넣기
+        # feat = x[:, :, 8:12]          # [B, N, 4]
+        # m = mask.unsqueeze(-1)        # [B, N, 1]
+        # mean = (feat * m).sum(dim=1, keepdim=True) / (m.sum(dim=1, keepdim=True) + 1e-8)
+        # var = ((feat - mean)**2 * m).sum(dim=1, keepdim=True) / (m.sum(dim=1, keepdim=True) + 1e-8)
+        # std = torch.sqrt(var + 1e-8)
+        # feat_norm = (feat - mean) / std
+        # x[:, :, 8:12] = feat_norm   # 다시 넣기
 
         x = apply_token_mask(x, 0.2)
 
