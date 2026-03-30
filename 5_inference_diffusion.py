@@ -34,7 +34,7 @@ DDIM_ETA = 0.0
 # DDIM sampling
 # =========================
 @torch.no_grad()
-def ddim_sample_y0(model, x, diffusion, t_seq, eta=0.0):
+def ddim_sample_y0(model, x, diffusion, t_seq, eta=0.0, attn_mask: torch.Tensor = None):
     model.eval()
     alpha_bar = diffusion["alpha_bar"]
 
@@ -45,7 +45,7 @@ def ddim_sample_y0(model, x, diffusion, t_seq, eta=0.0):
         t = torch.full((B,), int(t_i.item()), device=x.device, dtype=torch.long)
 
         tokens = torch.cat([y.unsqueeze(-1), x], dim=-1)
-        v_pred = model(tokens, t)
+        v_pred = model(tokens, t, key_padding_mask=attn_mask)
 
         ab_t_scalar = alpha_bar[t_i]
         ab_t = torch.full((B,), float(ab_t_scalar.item()), device=x.device, dtype=torch.float32)
@@ -77,12 +77,12 @@ def ddim_sample_y0(model, x, diffusion, t_seq, eta=0.0):
 # K sampling → mean / std
 # =========================
 @torch.no_grad()
-def sample_k_all(model, X, diffusion):
+def sample_k_all(model, X, diffusion, attn_mask):
     t_seq = make_t_seq(T_STEPS, SAMPLE_STEPS, X.device)
 
     samples = []
     for i in tqdm(range(K_SAMPLES), desc="Sampling"):
-        y0_hat = ddim_sample_y0(model, X, diffusion, t_seq, eta=DDIM_ETA)
+        y0_hat = ddim_sample_y0(model, X, diffusion, t_seq, eta=DDIM_ETA, attn_mask=attn_mask)
         samples.append(y0_hat)
 
     S = torch.stack(samples, dim=0)  # [K, T, N]
@@ -179,7 +179,15 @@ def main():
         # -------------------------
         # Sampling
         # -------------------------
-        S = sample_k_all(model, X, diffusion)  # [K,T,N]
+        # x: [B, N, F]
+        score = X[:, :, 8]   # 기준 feature
+        k = int(score.shape[1] * 0.2)                   # 각 batch마다 상위 20% threshold 계산
+        topk_vals, _ = torch.topk(score, k=k, dim=1)    # top-k threshold
+        threshold = topk_vals[:, -1].unsqueeze(1)  # [B,1]
+        keep_mask = score >= threshold   # [B,N]        # keep mask (True = 유지)
+        attn_mask = ~keep_mask           # [B,N]        # transformer용 mask (True = "mask out")
+
+        S = sample_k_all(model, X, diffusion, attn_mask)  # [K,T,N]
         S = S.cpu().numpy()
 
         # mask 반영

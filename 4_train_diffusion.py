@@ -54,7 +54,7 @@ P2_GAMMA = 1.0
 P2_K = 1.0
 
 # Training
-EPOCHS = 30
+EPOCHS = 50
 LR = 2e-4
 WEIGHT_DECAY = 1e-4
 GRAD_CLIP = 1.0
@@ -81,6 +81,7 @@ def ddim_sample_y0(
     diffusion: Dict[str, torch.Tensor],
     t_seq: torch.Tensor,
     eta: float = 0.0,
+    attn_mask: torch.Tensor = None,
 ) -> torch.Tensor:
     model.eval()
     alpha_bar = diffusion["alpha_bar"]  # [T]
@@ -92,7 +93,7 @@ def ddim_sample_y0(
         t = torch.full((B,), int(t_i.item()), device=x.device, dtype=torch.long)
 
         tokens = torch.cat([y.unsqueeze(-1), x], dim=-1)  # [B,N,F+1]
-        v_pred = model(tokens, t)                         # [B,N]
+        v_pred = model(tokens, t, key_padding_mask=attn_mask)                         # [B,N]
 
         ab_t_scalar = alpha_bar[t_i]
         ab_t = torch.full((B,), float(ab_t_scalar.item()), device=x.device, dtype=torch.float32)
@@ -129,11 +130,12 @@ def ddim_sample_y0_kmean_var(
     t_seq: torch.Tensor,
     k: int = 10,
     eta: float = 0.0,
+    attn_mask: torch.Tensor = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     model.eval()
     samples = []
     for _ in range(k):
-        y0_hat = ddim_sample_y0(model, x, diffusion, t_seq=t_seq, eta=eta)
+        y0_hat = ddim_sample_y0(model, x, diffusion, t_seq=t_seq, eta=eta, attn_mask=attn_mask)
         samples.append(y0_hat)
 
     S = torch.stack(samples, dim=0)          # [K,B,N]
@@ -168,20 +170,17 @@ def evaluate_sampling(
 
         mask = (x[:, :, 0] != 0).float()
 
-        # volume feature들 정규화
         # x: [B, N, F]
-        # mask: [B, N]
-        # feat = x[:, :, 8:12]          # [B, N, 4]
-        # m = mask.unsqueeze(-1)        # [B, N, 1]
-        # mean = (feat * m).sum(dim=1, keepdim=True) / (m.sum(dim=1, keepdim=True) + 1e-8)
-        # var = ((feat - mean)**2 * m).sum(dim=1, keepdim=True) / (m.sum(dim=1, keepdim=True) + 1e-8)
-        # std = torch.sqrt(var + 1e-8)
-        # feat_norm = (feat - mean) / std
-        # x[:, :, 8:12] = feat_norm   # 다시 넣기
+        score = x[:, :, 8]   # 기준 feature
+        k = int(score.shape[1] * 0.2)                   # 각 batch마다 상위 20% threshold 계산
+        topk_vals, _ = torch.topk(score, k=k, dim=1)    # top-k threshold
+        threshold = topk_vals[:, -1].unsqueeze(1)  # [B,1]
+        keep_mask = score >= threshold   # [B,N]        # keep mask (True = 유지)
+        attn_mask = ~keep_mask           # [B,N]        # transformer용 mask (True = "mask out")
 
         t_seq = make_t_seq(T_STEPS, sample_steps, x.device)
         y0_hat, y0_var = ddim_sample_y0_kmean_var(
-            model, x, diffusion, t_seq=t_seq, k=k_samples, eta=eta
+            model, x, diffusion, t_seq=t_seq, k=k_samples, eta=eta, attn_mask=attn_mask
         )
 
         diff = (y0_hat - y0) * mask
@@ -248,18 +247,15 @@ def train_one_epoch(
 
         mask = (x[:, :, 0] != 0).float()
 
-        # volume feature들 정규화
-        # x: [B, N, F]
-        # mask: [B, N]
-        # feat = x[:, :, 8:12]          # [B, N, 4]
-        # m = mask.unsqueeze(-1)        # [B, N, 1]
-        # mean = (feat * m).sum(dim=1, keepdim=True) / (m.sum(dim=1, keepdim=True) + 1e-8)
-        # var = ((feat - mean)**2 * m).sum(dim=1, keepdim=True) / (m.sum(dim=1, keepdim=True) + 1e-8)
-        # std = torch.sqrt(var + 1e-8)
-        # feat_norm = (feat - mean) / std
-        # x[:, :, 8:12] = feat_norm   # 다시 넣기
-
         x = apply_token_mask(x, 0.2)
+
+        # x: [B, N, F]
+        score = x[:, :, 8]   # 기준 feature
+        k = int(score.shape[1] * 0.2)                   # 각 batch마다 상위 20% threshold 계산
+        topk_vals, _ = torch.topk(score, k=k, dim=1)    # top-k threshold
+        threshold = topk_vals[:, -1].unsqueeze(1)  # [B,1]
+        keep_mask = score >= threshold   # [B,N]        # keep mask (True = 유지)
+        attn_mask = ~keep_mask           # [B,N]        # transformer용 mask (True = "mask out")
 
         t = torch.randint(0, T_STEPS, (B,), device=DEVICE, dtype=torch.int64)
         eps = torch.randn_like(y0)
@@ -269,7 +265,7 @@ def train_one_epoch(
         optimizer.zero_grad(set_to_none=True)
 
         with torch.amp.autocast("cuda", enabled=AMP):
-            v_pred = model(tokens, t)
+            v_pred = model(tokens, t, key_padding_mask=attn_mask)
 
             ab_t = alpha_bar[t]
 

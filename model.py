@@ -64,19 +64,18 @@ class DiffusionTransformer(nn.Module):
         self.out_norm = nn.LayerNorm(d_model)
         self.pred_head = nn.Linear(d_model, 1)
 
-    def forward(self, tokens: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        """
-        tokens: [B, N, in_dim]
-        t: [B] int64
-        returns: v_pred [B, N]
-        """
-        h = self.in_proj(tokens)     # [B,N,d]
-        h = h + self.pos_emb         # positional encoding
+    def forward(self, tokens: torch.Tensor, t: torch.Tensor, key_padding_mask=None):
+        h = self.in_proj(tokens)
+        h = h + self.pos_emb
 
-        te = self.time_mlp(self.time_emb(t))  # [B,d]
-        h = h + te.unsqueeze(1)      # add to all tokens
+        te = self.time_mlp(self.time_emb(t))
+        h = h + te.unsqueeze(1)
 
-        h = self.encoder(h)          # [B,N,d]
+        h = self.encoder(
+            h,
+            src_key_padding_mask=key_padding_mask   # ⭐ 핵심
+        )
+
         h = self.out_norm(h)
-        v = self.pred_head(h).squeeze(-1)  # [B,N]
+        v = self.pred_head(h).squeeze(-1)
         return v
