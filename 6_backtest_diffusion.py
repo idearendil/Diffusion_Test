@@ -22,7 +22,7 @@ TOP_K = 2                        # 하루에 매매할 종목 개수
 PRE_SELECTED_TOLERANCE = 0.0     # 전날에 매수한 종목을 그대로 유지할지를 결정
 BUY_THRESHOLD = 0.02             # 예측값이 1차적으로 이 값을 넘어야 매수
 HALT_THRESHOLD = 0.0            # 한 달의 수익률이 이보다 낮으면 그 달은 skip
-LINEAR_Z_LIST = [0.6, 0.32]     # z=0.46 -> 0.2% 이상 상승할 가능성이 70% 이상
+LINEAR_Z_LIST = [0.46, 0.46]     # z=0.46 -> 0.2% 이상 상승할 가능성이 70% 이상
 
 # =========================
 # Load refined data cache

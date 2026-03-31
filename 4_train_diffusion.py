@@ -54,7 +54,7 @@ P2_GAMMA = 1.0
 P2_K = 1.0
 
 # Training
-EPOCHS = 50
+EPOCHS = 30
 LR = 2e-4
 WEIGHT_DECAY = 1e-4
 GRAD_CLIP = 1.0
@@ -170,17 +170,20 @@ def evaluate_sampling(
 
         mask = (x[:, :, 0] != 0).float()
 
+        # volume feature들 정규화
         # x: [B, N, F]
-        score = x[:, :, 8]   # 기준 feature
-        k = int(score.shape[1] * 0.2)                   # 각 batch마다 상위 20% threshold 계산
-        topk_vals, _ = torch.topk(score, k=k, dim=1)    # top-k threshold
-        threshold = topk_vals[:, -1].unsqueeze(1)  # [B,1]
-        keep_mask = score >= threshold   # [B,N]        # keep mask (True = 유지)
-        attn_mask = ~keep_mask           # [B,N]        # transformer용 mask (True = "mask out")
+        # mask: [B, N]
+        feat = x[:, :, 8:12]          # [B, N, 4]
+        m = mask.unsqueeze(-1)        # [B, N, 1]
+        mean = (feat * m).sum(dim=1, keepdim=True) / (m.sum(dim=1, keepdim=True) + 1e-8)
+        var = ((feat - mean)**2 * m).sum(dim=1, keepdim=True) / (m.sum(dim=1, keepdim=True) + 1e-8)
+        std = torch.sqrt(var + 1e-8)
+        feat_norm = (feat - mean) / std
+        x[:, :, 8:12] = feat_norm   # 다시 넣기
 
         t_seq = make_t_seq(T_STEPS, sample_steps, x.device)
         y0_hat, y0_var = ddim_sample_y0_kmean_var(
-            model, x, diffusion, t_seq=t_seq, k=k_samples, eta=eta, attn_mask=attn_mask
+            model, x, diffusion, t_seq=t_seq, k=k_samples, eta=eta
         )
 
         diff = (y0_hat - y0) * mask
@@ -247,15 +250,18 @@ def train_one_epoch(
 
         mask = (x[:, :, 0] != 0).float()
 
-        x = apply_token_mask(x, 0.2)
-
+        # volume feature들 정규화
         # x: [B, N, F]
-        score = x[:, :, 8]   # 기준 feature
-        k = int(score.shape[1] * 0.2)                   # 각 batch마다 상위 20% threshold 계산
-        topk_vals, _ = torch.topk(score, k=k, dim=1)    # top-k threshold
-        threshold = topk_vals[:, -1].unsqueeze(1)  # [B,1]
-        keep_mask = score >= threshold   # [B,N]        # keep mask (True = 유지)
-        attn_mask = ~keep_mask           # [B,N]        # transformer용 mask (True = "mask out")
+        # mask: [B, N]
+        feat = x[:, :, 8:12]          # [B, N, 4]
+        m = mask.unsqueeze(-1)        # [B, N, 1]
+        mean = (feat * m).sum(dim=1, keepdim=True) / (m.sum(dim=1, keepdim=True) + 1e-8)
+        var = ((feat - mean)**2 * m).sum(dim=1, keepdim=True) / (m.sum(dim=1, keepdim=True) + 1e-8)
+        std = torch.sqrt(var + 1e-8)
+        feat_norm = (feat - mean) / std
+        x[:, :, 8:12] = feat_norm   # 다시 넣기
+
+        x = apply_token_mask(x, 0.2)
 
         t = torch.randint(0, T_STEPS, (B,), device=DEVICE, dtype=torch.int64)
         eps = torch.randn_like(y0)
@@ -265,7 +271,7 @@ def train_one_epoch(
         optimizer.zero_grad(set_to_none=True)
 
         with torch.amp.autocast("cuda", enabled=AMP):
-            v_pred = model(tokens, t, key_padding_mask=attn_mask)
+            v_pred = model(tokens, t)
 
             ab_t = alpha_bar[t]
 

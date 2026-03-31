@@ -77,7 +77,7 @@ def ddim_sample_y0(model, x, diffusion, t_seq, eta=0.0, attn_mask: torch.Tensor 
 # K sampling → mean / std
 # =========================
 @torch.no_grad()
-def sample_k_all(model, X, diffusion, attn_mask):
+def sample_k_all(model, X, diffusion, attn_mask=None):
     t_seq = make_t_seq(T_STEPS, SAMPLE_STEPS, X.device)
 
     samples = []
@@ -176,22 +176,27 @@ def main():
             "sqrt_one_minus_alpha_bar": torch.sqrt(1.0 - alpha_bar),
         }
 
+        mask = (X[:, :, 0] != 0).float()
+
         # -------------------------
         # Sampling
         # -------------------------
+        # volume feature들 정규화
         # x: [B, N, F]
-        score = X[:, :, 8]   # 기준 feature
-        k = int(score.shape[1] * 0.2)                   # 각 batch마다 상위 20% threshold 계산
-        topk_vals, _ = torch.topk(score, k=k, dim=1)    # top-k threshold
-        threshold = topk_vals[:, -1].unsqueeze(1)  # [B,1]
-        keep_mask = score >= threshold   # [B,N]        # keep mask (True = 유지)
-        attn_mask = ~keep_mask           # [B,N]        # transformer용 mask (True = "mask out")
+        # mask: [B, N]
+        feat = X[:, :, 8:12]          # [B, N, 4]
+        m = mask.unsqueeze(-1)        # [B, N, 1]
+        mean = (feat * m).sum(dim=1, keepdim=True) / (m.sum(dim=1, keepdim=True) + 1e-8)
+        var = ((feat - mean)**2 * m).sum(dim=1, keepdim=True) / (m.sum(dim=1, keepdim=True) + 1e-8)
+        std = torch.sqrt(var + 1e-8)
+        feat_norm = (feat - mean) / std
+        X[:, :, 8:12] = feat_norm   # 다시 넣기
 
-        S = sample_k_all(model, X, diffusion, attn_mask)  # [K,T,N]
+        S = sample_k_all(model, X, diffusion)  # [K,T,N]
         S = S.cpu().numpy()
 
         # mask 반영
-        mask = (X[:, :, 0] != 0).cpu().numpy()
+        mask = mask.cpu().numpy()
         for k in range(K_SAMPLES):
             S[k][mask == 0] = -100.0
 
