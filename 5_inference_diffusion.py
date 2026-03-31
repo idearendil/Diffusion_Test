@@ -184,13 +184,13 @@ def main():
         # volume feature들 정규화
         # x: [B, N, F]
         # mask: [B, N]
-        feat = X[:, :, 8:12]          # [B, N, 4]
-        m = mask.unsqueeze(-1)        # [B, N, 1]
-        mean = (feat * m).sum(dim=1, keepdim=True) / (m.sum(dim=1, keepdim=True) + 1e-8)
-        var = ((feat - mean)**2 * m).sum(dim=1, keepdim=True) / (m.sum(dim=1, keepdim=True) + 1e-8)
-        std = torch.sqrt(var + 1e-8)
-        feat_norm = (feat - mean) / std
-        X[:, :, 8:12] = feat_norm   # 다시 넣기
+        # feat = X[:, :, 8:12]          # [B, N, 4]
+        # m = mask.unsqueeze(-1)        # [B, N, 1]
+        # mean = (feat * m).sum(dim=1, keepdim=True) / (m.sum(dim=1, keepdim=True) + 1e-8)
+        # var = ((feat - mean)**2 * m).sum(dim=1, keepdim=True) / (m.sum(dim=1, keepdim=True) + 1e-8)
+        # std = torch.sqrt(var + 1e-8)
+        # feat_norm = (feat - mean) / std
+        # X[:, :, 8:12] = feat_norm   # 다시 넣기
 
         S = sample_k_all(model, X, diffusion)  # [K,T,N]
         S = S.cpu().numpy()
