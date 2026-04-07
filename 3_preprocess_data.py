@@ -289,6 +289,15 @@ def add_features_and_labels(df: pd.DataFrame, ticker: str) -> pd.DataFrame:
     df[LABEL_COL] = (df[CLOSE_COL].shift(-1) / df[CLOSE_COL] - 1) * 10.0
     # df[LABEL_COL] = (df[CLOSE_COL] * 1.0025 < df[CLOSE_COL].shift(-1)).astype(int)
 
+    # next_close = df[CLOSE_COL].shift(-1)
+    # next_low = df[LOW_COL].shift(-1)
+    # cur_close = df[CLOSE_COL]
+    # df[LABEL_COL] = np.where(
+    #     cur_close * 0.9 < next_low,
+    #     (next_close / cur_close - 1) * 10.0,
+    #     (0.9 - 1) * 10.0
+    # )
+
     # 다음날 없는 마지막 행 + 이전 행들이 적은 첫 부분 행들 제거
     df = df.dropna()
 

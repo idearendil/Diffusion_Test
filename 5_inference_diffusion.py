@@ -4,6 +4,7 @@ from pathlib import Path
 from tqdm import tqdm
 import calendar
 import numpy as np
+from scipy.stats import norm
 
 from utils import list_tickers, make_t_seq, cosine_beta_schedule, y0_from_v_yt, eps_from_v_yt
 from model import DiffusionTransformer
@@ -31,10 +32,26 @@ DDIM_ETA = 0.0
 
 
 # =========================
+# Fixed Gaussian samples
+# =========================
+def make_fixed_gaussian_samples(K, shape, device):
+    """
+    Stratified Gaussian sampling
+    """
+    u = (np.arange(K) + 0.5) / K
+    z_vals = norm.ppf(u)  # inverse CDF
+
+    z_vals = torch.tensor(z_vals, dtype=torch.float32, device=device)
+
+    z = z_vals.view(K, 1, 1).expand(K, *shape)
+    return z
+
+
+# =========================
 # DDIM sampling
 # =========================
 @torch.no_grad()
-def ddim_sample_y0(model, x, diffusion, t_seq, eta=0.0):
+def ddim_sample_y0(model, x, diffusion, t_seq, z_fixed, eta=0.0):
     model.eval()
     alpha_bar = diffusion["alpha_bar"]
 
@@ -63,7 +80,7 @@ def ddim_sample_y0(model, x, diffusion, t_seq, eta=0.0):
 
         if eta > 0.0:
             sigma = eta * torch.sqrt((1 - ab_prev_scalar) / (1 - ab_t_scalar)) * torch.sqrt(1 - ab_t_scalar / ab_prev_scalar)
-            z = torch.randn_like(y)
+            z = z_fixed
         else:
             sigma = 0.0
             z = 0.0
@@ -80,9 +97,15 @@ def ddim_sample_y0(model, x, diffusion, t_seq, eta=0.0):
 def sample_k_all(model, X, diffusion):
     t_seq = make_t_seq(T_STEPS, SAMPLE_STEPS, X.device)
 
+    z_fixed = make_fixed_gaussian_samples(
+        K_SAMPLES,
+        (X.shape[0], X.shape[1]),
+        X.device
+    )
+
     samples = []
     for i in tqdm(range(K_SAMPLES), desc="Sampling"):
-        y0_hat = ddim_sample_y0(model, X, diffusion, t_seq, eta=DDIM_ETA)
+        y0_hat = ddim_sample_y0(model, X, diffusion, t_seq, z_fixed[i], eta=DDIM_ETA)
         samples.append(y0_hat)
 
     S = torch.stack(samples, dim=0)  # [K, T, N]
