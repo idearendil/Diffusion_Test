@@ -20,8 +20,7 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 START_SEED_MONEY = 1_000_000.0   # 시작 자금 (원, 단위 자유)
 TOP_K = 3                        # 하루에 매매할 종목 개수
-PRE_SELECTED_TOLERANCE = 0.0     # 전날에 매수한 종목을 그대로 유지할지를 결정
-LINEAR_BUY_THRESHOLD = [0.53, 0.53]
+LINEAR_BUY_THRESHOLD = [0.55, 0.5]
 HALT_THRESHOLD = 0.0            # 한 달의 수익률이 이보다 낮으면 그 달은 skip
 
 # =========================
@@ -45,7 +44,8 @@ def sigmoid(x):
 # Main Backtest
 # =========================
 def main():
-    inference_files = sorted(INFER_DIR.glob("*.csv"))
+    binary_files = sorted(INFER_DIR.glob("*_binary.csv"))
+    regression_files = sorted(INFER_DIR.glob("*_regression.csv"))
     test_val_lst = pickle.load(open(TEST_VAL_LST_PATH, "rb"))
 
     seed_money = START_SEED_MONEY
@@ -57,25 +57,26 @@ def main():
     print("===== Backtest start =====")
 
     buy_threshold_idx = -1
-    for infer_path in tqdm(inference_files):
+    for binary_path, regression_path in tqdm(zip(binary_files, regression_files)):
         buy_threshold_idx += 1
-        buy_threshold_ratio = buy_threshold_idx / (len(inference_files) - 1)
+        buy_threshold_ratio = buy_threshold_idx / (len(binary_files) - 1)
         buy_threshold = LINEAR_BUY_THRESHOLD[0] + (LINEAR_BUY_THRESHOLD[1] - LINEAR_BUY_THRESHOLD[0]) * buy_threshold_ratio
-        infer_df = pd.read_csv(infer_path, index_col=0)
-        infer_df.index = pd.to_datetime(infer_df.index)
+        
+        binary_df = pd.read_csv(binary_path, index_col=0)
+        binary_df.index = pd.to_datetime(binary_df.index)
+        regression_df = pd.read_csv(regression_path, index_col=0)
+        regression_df.index = pd.to_datetime(regression_df.index)
 
         return_record = []
         halt_flag = False
 
-        for date, row in infer_df.iterrows():
-            scores = row.sort_values(ascending=False)
+        for binary_tuple, regression_tuple in zip(binary_df.iterrows(), regression_df.iterrows()):
+            date, binary_row = binary_tuple
+            _, regression_row = regression_tuple
+            scores = regression_row.sort_values(ascending=False)
 
             selected = []
-            maintained = []
-            tolerance_num = int(len(scores.index) * PRE_SELECTED_TOLERANCE)
-            tolerance_cnt = 0
             for ticker in scores.index:
-                tolerance_cnt += 1
 
                 if ticker not in refined_cache:
                     refined_cache[ticker] = load_refined_data(ticker)
@@ -85,20 +86,13 @@ def main():
                     print(f"Missing date: {ticker} {date}")
                     continue
 
-                if ref_df.loc[date, "predictable"] == 1.0 and sigmoid(scores[ticker]) > buy_threshold:
-                    if ticker in pre_selected and tolerance_cnt <= tolerance_num:
-                        maintained.append(ticker)
-                    else:
-                        selected.append(ticker)
-
-            final_selected = maintained
-            for ticker in selected:
-                if len(final_selected) >= TOP_K:
-                    break
-                final_selected.append(ticker)
+                if ref_df.loc[date, "predictable"] == 1.0 and sigmoid(binary_row[ticker]) > buy_threshold:
+                    selected.append(ticker)
+                    if len(selected) >= TOP_K:
+                        break
 
             # 선택 종목 부족하면 skip (현금 보유)
-            if len(final_selected) < TOP_K:
+            if len(selected) < TOP_K:
                 equity_curve.append((date, seed_money))
                 continue
 
@@ -119,7 +113,7 @@ def main():
             alloc = seed_money / TOP_K
             next_seed_money = 0.0
 
-            for ticker in final_selected:
+            for ticker in selected:
                 ref_df = refined_cache[ticker]
 
                 try:
@@ -152,7 +146,7 @@ def main():
 
             seed_money = next_seed_money
             equity_curve.append((date, seed_money))
-            pre_selected = final_selected
+            pre_selected = selected
 
     # =========================
     # Save results
@@ -170,7 +164,7 @@ def main():
     test_series = []
     for row in test_val_lst:
         test_series += [row[2]] * 20
-    test_series += [test_val_lst[-1][2]] * 33
+    test_series += [test_val_lst[-1][2]] * 32
 
     fig, ax1 = plt.subplots(figsize=(10, 6))
 

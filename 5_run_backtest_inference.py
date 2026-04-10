@@ -86,14 +86,16 @@ def load_ensemble_weights(date):
 # =========================
 @torch.no_grad()
 def run_ensemble(models, X, weights):
-    preds = []
+    preds1 = []
+    preds2 = []
 
     for model_id, model in zip(SEEDS, models):
         model.eval()
-        y_hat, _ = model(X)   # [T, N]
-        preds.append(y_hat * weights[model_id])
+        y1_hat, y2_hat = model(X)   # [T, N]
+        preds1.append(y1_hat * weights[model_id])
+        preds2.append(y2_hat * weights[model_id])
 
-    return torch.stack(preds).sum(dim=0)  # [T, N]
+    return torch.stack(preds1).sum(dim=0), torch.stack(preds2).sum(dim=0)  # [T, N]
 
 
 # =========================
@@ -106,8 +108,9 @@ def main():
         date = date_dir.name
         print(f"\n===== Inference {date} =====")
 
-        out_csv = OUT_ROOT / f"{date}.csv"
-        if out_csv.exists():
+        out_csv1 = OUT_ROOT / f"{date}_binary.csv"
+        out_csv2 = OUT_ROOT / f"{date}_regression.csv"
+        if out_csv1.exists():
             print(f"[SKIP] {date} already inferred")
             continue
 
@@ -127,8 +130,8 @@ def main():
         # -------------------------
         # Load models
         # -------------------------
-        ensemble_weights = load_ensemble_weights(date)
-        print(f"Ensemble weights: {ensemble_weights}")
+        # ensemble_weights = load_ensemble_weights(date)
+        # print(f"Ensemble weights: {ensemble_weights}")
         ensemble_weights = {k: 1 / 3 for k in SEEDS}
 
         models = []
@@ -153,8 +156,9 @@ def main():
         # -------------------------
         # Inference
         # -------------------------
-        Y_hat = run_ensemble(models, X, ensemble_weights)  # [T, N]
-        Y_hat = Y_hat.cpu().numpy()
+        Y1_hat, Y2_hat = run_ensemble(models, X, ensemble_weights)  # [T, N]
+        Y1_hat = Y1_hat.cpu().numpy()
+        Y2_hat = Y2_hat.cpu().numpy()
 
         # -------------------------
         # Trading days
@@ -165,8 +169,8 @@ def main():
         start = f"{year:04d}-{month:02d}-01"
         end   = f"{year:04d}-{month:02d}-{last_day:02d}"
         trading_days = load_trading_days(start, end)
-        # if year == 2025 and month == 12:
-        #     trading_days = trading_days[:-1]
+        if year == 2025 and month == 12:
+            trading_days = trading_days[:-1]
 
         if len(trading_days) != T:
             raise ValueError(
@@ -176,11 +180,14 @@ def main():
         # -------------------------
         # Save CSV
         # -------------------------
-        df = pd.DataFrame(Y_hat, index=trading_days, columns=tickers)
+        df = pd.DataFrame(Y1_hat, index=trading_days, columns=tickers)
         df.index.name = "date"
-        df.to_csv(out_csv)
+        df.to_csv(out_csv1)
+        df = pd.DataFrame(Y2_hat, index=trading_days, columns=tickers)
+        df.index.name = "date"
+        df.to_csv(out_csv2)
 
-        print(f"[OK] saved → {out_csv}")
+        print(f"[OK] saved → {out_csv1}, {out_csv2}")
 
 
 if __name__ == "__main__":

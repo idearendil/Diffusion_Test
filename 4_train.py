@@ -65,8 +65,8 @@ def apply_token_mask(x, mask_ratio):
     return x
 
 
-def weighted_ensemble(preds: List[torch.Tensor], weights: List[float]):
-    w = torch.tensor(weights, device=preds[0].device)
+def weighted_ensemble(preds: List[torch.Tensor]):
+    w = torch.tensor([1.0] * len(preds), device=preds[0].device)
     w = torch.clamp(w, min=0.0)
     w = w / (w.sum() + 1e-8)
 
@@ -109,7 +109,7 @@ def evaluate(model, loader):
         # evaluate complimental curves
         y1_hat *= predictable
 
-        _, topk = torch.topk(y1_hat, k=5, dim=1)
+        _, topk = torch.topk(y1_hat, k=3, dim=1)
         clipped = torch.zeros_like(y1_hat)
         clipped.scatter_(1, topk, 1.0)
         denom = torch.sum(clipped, dim=1).mean() + 1e-8
@@ -122,7 +122,7 @@ def evaluate(model, loader):
 
 
 @torch.no_grad()
-def evaluate_ensemble(models, weights, loader):
+def evaluate_ensemble(models, loader):
     for m in models:
         m.eval()
 
@@ -134,7 +134,7 @@ def evaluate_ensemble(models, weights, loader):
         predictable = (x[:, :, 0] != 0).float()
 
         preds = [torch.stack(m(x)) for m in models]
-        y1_hat, y2_hat = weighted_ensemble(preds, weights)
+        y1_hat, y2_hat = weighted_ensemble(preds)
 
         loss_bin = (
             F.binary_cross_entropy_with_logits(
@@ -153,7 +153,7 @@ def evaluate_ensemble(models, weights, loader):
         # evaluate complimental curves
         y1_hat *= predictable
 
-        _, topk = torch.topk(y1_hat, k=5, dim=1)
+        _, topk = torch.topk(y1_hat, k=3, dim=1)
         clipped = torch.zeros_like(y1_hat)
         clipped.scatter_(1, topk, 1.0)
         denom = torch.sum(clipped, dim=1).mean() + 1e-8
@@ -233,7 +233,6 @@ def main():
         DATA_ROOT = date_dir
         OUT_DIR = BASE_OUT_ROOT / date
         LOG_CSV = OUT_DIR / "metrics.csv"
-        ENSEMBLE_WEIGHTS_PATH = OUT_DIR / "ensemble_weights.pkl"
 
         if LOG_CSV.exists():
             print(f"[SKIP] {date} already trained")
@@ -259,7 +258,6 @@ def main():
 
         csv_rows = []
         best_models = []
-        best_scores = []
         epoch_max = int(MAX_EPOCHS_RATE / len(X_train))
         epoch_warmup = int(epoch_max / 15)
 
@@ -296,7 +294,6 @@ def main():
             )
 
             best_score = 1e9
-            ensemble_weight = 0.0
             ckpt = OUT_DIR / f"best_model_seed{seed}.pt"
 
             for epoch in range(1, epoch_max + 1):
@@ -309,11 +306,9 @@ def main():
                 if vals[0] < best_score and epoch > epoch_max * MIN_EPOCHS_RATE:
                     best_score = vals[0]
                     torch.save(model.state_dict(), ckpt)
-                    ensemble_weight = vals[2]
 
             model.load_state_dict(torch.load(ckpt))
             best_models.append(model)
-            best_scores.append(ensemble_weight)
 
         with open(LOG_CSV, "w", newline="") as f:
             writer = csv.writer(f)
@@ -339,17 +334,14 @@ def main():
             plt.savefig(OUT_DIR / f"{col}.png")
             plt.close()
 
-        with open(ENSEMBLE_WEIGHTS_PATH, "wb") as f:
-            pickle.dump(best_scores, f)
-        test_vals = evaluate_ensemble(best_models, best_scores, test_loader)
-        print(f"[{date} Ensemble Test] | bin_loss: {test_vals[1]}, exp5: {test_vals[2]}")
+        test_vals = evaluate_ensemble(best_models, test_loader)
+        print(f"[{date} Ensemble Test] | bin_loss: {test_vals[1]}, exp3: {test_vals[2]}")
         test_val_lst.append(test_vals)
 
         # 🔥 GPU 메모리 정리
         for m in best_models:
             del m
         best_models.clear()
-        best_scores.clear()
 
         torch.cuda.empty_cache()
 
