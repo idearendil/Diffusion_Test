@@ -59,6 +59,6 @@ class RegressionTransformer(nn.Module):
 
         h = self.encoder(h)
 
-        out = self.head(h).squeeze(-1)  # [B, N]
-        confidence = torch.softmax(self.confidence_head(h).squeeze(-1), dim=1)  # [B, N]
-        return out, confidence
+        out1 = self.head(h).squeeze()  # [B, N]
+        out2 = self.confidence_head(h).squeeze() # [B, N]
+        return out1, out2

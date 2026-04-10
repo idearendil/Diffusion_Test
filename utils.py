@@ -43,8 +43,8 @@ def load_split_tensors(split_dir: Path, tickers: List[str]) -> Tuple[torch.Tenso
             raise FileNotFoundError(f"Missing tensor for ticker={tkr} in {split_dir}")
 
         x = torch.load(x_path, map_location="cpu")  # [T, F]
-        y = torch.load(y_path, map_location="cpu")  # [T]
-        if x.ndim != 2 or y.ndim != 1:
+        y = torch.load(y_path, map_location="cpu")  # [T, 2]
+        if x.ndim != 2 or y.ndim != 2:
             raise ValueError(f"Bad shape: {tkr}: x={tuple(x.shape)} y={tuple(y.shape)}")
 
         if x.shape[0] != y.shape[0]:
@@ -66,7 +66,7 @@ class TimeIndexDataset(Dataset):
         X: [T, N, F]
         Y: [T, N]
         """
-        assert X.ndim == 3 and Y.ndim == 2
+        assert X.ndim == 3 and Y.ndim == 3
         assert X.shape[0] == Y.shape[0] and X.shape[1] == Y.shape[1]
         self.X = X
         self.Y = Y

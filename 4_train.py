@@ -25,12 +25,14 @@ BASE_OUT_ROOT.mkdir(parents=True, exist_ok=True)
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-SEEDS = [6, 7, 8]
+SEEDS = [55, 56, 57]
 
 TRAIN_BATCH_SIZE = 16
 TEST_BATCH_SIZE = 2048
 
-EXP_LOSS_WEIGHT = 1.0
+BIN_LOSS_WEIGHT = 1.0
+MSE_LOSS_WEIGHT = 1.0
+
 MAX_EPOCHS_RATE = 50 * 800
 MIN_EPOCHS_RATE = 0.6
 LR = 2e-4
@@ -85,34 +87,33 @@ def evaluate(model, loader):
 
     for x, y in loader:
         x, y = x.to(DEVICE), y.to(DEVICE)
-        mask = (x[:, :, 0] != 0).float()
+        predictable = (x[:, :, 0] != 0).float()
 
-        y_hat, confi = model(x)
+        y1_hat, y2_hat = model(x)
 
-        # evaluate training loss
-        masked_confi = confi * mask
-        masked_confi = masked_confi / masked_confi.sum(dim=1, keepdim=True)
-
+        # loss_exp = torch.sum(y * masked_confi, dim=1).mean()
         loss_bin = (
             F.binary_cross_entropy_with_logits(
-                y_hat,
-                y.float(),
+                y1_hat,
+                y[:,:,0].float(),
                 reduction='none'
-            ) * mask
-        ).sum() / (mask.sum() + 1e-8)
+            ) * predictable
+        ).sum() / (predictable.sum() + 1e-8)
+        loss_mse = ((y2_hat - y[:,:,1]) ** 2 * predictable).sum() / (predictable.sum() + 1e-8)
 
-        loss = loss_bin * EXP_LOSS_WEIGHT
+        loss = loss_bin * BIN_LOSS_WEIGHT + loss_mse * MSE_LOSS_WEIGHT
+
         totals[0] += loss.item()
         totals[1] += loss_bin.item()
 
         # evaluate complimental curves
-        y_hat *= mask
+        y1_hat *= predictable
 
-        _, topk = torch.topk(y_hat, k=5, dim=1)
-        clipped = torch.zeros_like(y_hat)
+        _, topk = torch.topk(y1_hat, k=5, dim=1)
+        clipped = torch.zeros_like(y1_hat)
         clipped.scatter_(1, topk, 1.0)
         denom = torch.sum(clipped, dim=1).mean() + 1e-8
-        exp  = (torch.sum(y * clipped, dim=1) / denom).mean()
+        exp  = (torch.sum(y[:,:,1] * clipped, dim=1) / denom).mean()
         totals[2] += exp.item()
 
         n_batches += 1
@@ -130,36 +131,33 @@ def evaluate_ensemble(models, weights, loader):
 
     for x, y in loader:
         x, y = x.to(DEVICE), y.to(DEVICE)
-        mask = (x[:, :, 0] != 0).float()
+        predictable = (x[:, :, 0] != 0).float()
 
         preds = [torch.stack(m(x)) for m in models]
-        y_hat, confi = weighted_ensemble(preds, weights)
-
-        # evaluate training loss
-        masked_confi = confi * mask
-        masked_confi = masked_confi / (masked_confi.sum(dim=1, keepdim=True) + 1e-8)
+        y1_hat, y2_hat = weighted_ensemble(preds, weights)
 
         loss_bin = (
             F.binary_cross_entropy_with_logits(
-                y_hat,
-                y.float(),
+                y1_hat,
+                y[:,:,0].float(),
                 reduction='none'
-            ) * mask
-        ).sum() / (mask.sum() + 1e-8)
+            ) * predictable
+        ).sum() / (predictable.sum() + 1e-8)
+        loss_mse = ((y2_hat - y[:,:,1]) ** 2 * predictable).sum() / (predictable.sum() + 1e-8)
 
-        loss = loss_bin * EXP_LOSS_WEIGHT
-        
+        loss = loss_bin * BIN_LOSS_WEIGHT + loss_mse * MSE_LOSS_WEIGHT
+
         totals[0] += loss.item()
         totals[1] += loss_bin.item()
 
         # evaluate complimental curves
-        y_hat *= mask
+        y1_hat *= predictable
 
-        _, topk = torch.topk(y_hat, k=5, dim=1)
-        clipped = torch.zeros_like(y_hat)
+        _, topk = torch.topk(y1_hat, k=5, dim=1)
+        clipped = torch.zeros_like(y1_hat)
         clipped.scatter_(1, topk, 1.0)
         denom = torch.sum(clipped, dim=1).mean() + 1e-8
-        exp  = (torch.sum(y * clipped, dim=1) / denom).mean()
+        exp  = (torch.sum(y[:,:,1] * clipped, dim=1) / denom).mean()
         totals[2] += exp.item()
 
         n_batches += 1
@@ -193,21 +191,19 @@ def train_one_epoch(model, loader, optimizer, scaler, scheduler, epoch, epoch_ma
         optimizer.zero_grad(set_to_none=True)
 
         with torch.amp.autocast("cuda", enabled=AMP):
-            y_hat, confi = model(x)
-            masked_confi = confi * predictable
-            masked_confi = masked_confi / masked_confi.sum(dim=1, keepdim=True)
+            y1_hat, y2_hat = model(x)
 
-            # loss_mse = ((y_hat - y_norm) ** 2 * predictable).sum() / (predictable.sum() + 1e-8)
             # loss_exp = torch.sum(y * masked_confi, dim=1).mean()
             loss_bin = (
                 F.binary_cross_entropy_with_logits(
-                    y_hat,
-                    y.float(),
+                    y1_hat,
+                    y[:,:,0].float(),
                     reduction='none'
                 ) * predictable
             ).sum() / (predictable.sum() + 1e-8)
+            loss_mse = ((y2_hat - y[:,:,1]) ** 2 * predictable).sum() / (predictable.sum() + 1e-8)
 
-            loss = loss_bin * EXP_LOSS_WEIGHT
+            loss = loss_bin * BIN_LOSS_WEIGHT + loss_mse * MSE_LOSS_WEIGHT
 
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
