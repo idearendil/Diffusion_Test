@@ -251,40 +251,40 @@ def add_features_and_labels(df: pd.DataFrame, ticker: str) -> pd.DataFrame:
 
     # 투자자 유형별 feature 처리
     for c in INVESTORS_COL:
-        # df = df.copy()
-        # volume_col = f"{c}_거래량"
-        # netbuy_col = f"{c}_순매수"
-        # df[volume_col] = df[f"매수_{c}"] + df[f"매도_{c}"]
-        # df[netbuy_col] = df[f"매수_{c}"] - df[f"매도_{c}"]
+        df = df.copy()
+        volume_col = f"{c}_거래량"
+        netbuy_col = f"{c}_순매수"
+        df[volume_col] = df[f"매수_{c}"] + df[f"매도_{c}"]
+        df[netbuy_col] = df[f"매수_{c}"] - df[f"매도_{c}"]
         df.drop(columns=[f"매수_{c}", f"매도_{c}"], inplace=True)
 
-        # df[volume_col + "_log"] = np.log(df[volume_col] + 1.0)
-        # df[volume_col + "_log_ma_5"] = df[volume_col + "_log"].rolling(window=5, min_periods=3).mean()
-        # df[volume_col + "_log_ma_20"] = df[volume_col + "_log"].rolling(window=20, min_periods=6).mean()
-        # df[volume_col + "_log_ma_60"] = df[volume_col + "_log"].rolling(window=60, min_periods=20).mean()
-        # df[volume_col + "_ma_5"] = df[volume_col].rolling(window=5, min_periods=3).mean()
-        # df[volume_col + "_ma_20"] = df[volume_col].rolling(window=20, min_periods=6).mean()
-        # df[volume_col + "_ma_60"] = df[volume_col].rolling(window=60, min_periods=20).mean()
-        # df[volume_col + "_ratio_5"] = np.log(df[volume_col] / (df[volume_col + "_ma_5"] + 1.0) + 1.0)
-        # df[volume_col + "_ratio_20"] = np.log(df[volume_col] / (df[volume_col + "_ma_20"] + 1.0) + 1.0)
-        # df[volume_col + "_ratio_60"] = np.log(df[volume_col] / (df[volume_col + "_ma_60"] + 1.0) + 1.0)
-        # df[volume_col + "_diff"] = df[volume_col] / (df[volume_col].shift(1) + 1.0)
-        # df[volume_col + "_diff"] = np.log(np.clip(df[volume_col + "_diff"].values, 0.0, 10.0) + 1.0)
-        # df[volume_col + "_diff_ma_5"] = df[volume_col + "_diff"].diff().rolling(window=5, min_periods=3).mean()
-        # df[volume_col + "_diff_ma_20"] = df[volume_col + "_diff"].diff().rolling(window=20, min_periods=6).mean()
-        # df[volume_col + "_diff_ma_60"] = df[volume_col + "_diff"].diff().rolling(window=60, min_periods=20).mean()
+        df[volume_col + "_log"] = np.log(df[volume_col] + 1.0)
+        df[volume_col + "_log_ma_5"] = df[volume_col + "_log"].rolling(window=5, min_periods=3).mean()
+        df[volume_col + "_log_ma_20"] = df[volume_col + "_log"].rolling(window=20, min_periods=6).mean()
+        df[volume_col + "_log_ma_60"] = df[volume_col + "_log"].rolling(window=60, min_periods=20).mean()
+        df[volume_col + "_ma_5"] = df[volume_col].rolling(window=5, min_periods=3).mean()
+        df[volume_col + "_ma_20"] = df[volume_col].rolling(window=20, min_periods=6).mean()
+        df[volume_col + "_ma_60"] = df[volume_col].rolling(window=60, min_periods=20).mean()
+        df[volume_col + "_ratio_5"] = np.log(df[volume_col] / (df[volume_col + "_ma_5"] + 1.0) + 1.0)
+        df[volume_col + "_ratio_20"] = np.log(df[volume_col] / (df[volume_col + "_ma_20"] + 1.0) + 1.0)
+        df[volume_col + "_ratio_60"] = np.log(df[volume_col] / (df[volume_col + "_ma_60"] + 1.0) + 1.0)
+        df[volume_col + "_diff"] = df[volume_col] / (df[volume_col].shift(1) + 1.0)
+        df[volume_col + "_diff"] = np.log(np.clip(df[volume_col + "_diff"].values, 0.0, 10.0) + 1.0)
+        df[volume_col + "_diff_ma_5"] = df[volume_col + "_diff"].diff().rolling(window=5, min_periods=3).mean()
+        df[volume_col + "_diff_ma_20"] = df[volume_col + "_diff"].diff().rolling(window=20, min_periods=6).mean()
+        df[volume_col + "_diff_ma_60"] = df[volume_col + "_diff"].diff().rolling(window=60, min_periods=20).mean()
 
-        # df.drop(columns=[volume_col + "_ma_5", volume_col + "_ma_20", volume_col + "_ma_60"], inplace=True)
-        # df.drop(columns=[volume_col], inplace=True)
+        df.drop(columns=[volume_col + "_ma_5", volume_col + "_ma_20", volume_col + "_ma_60"], inplace=True)
+        df.drop(columns=[volume_col], inplace=True)
 
-        # df[netbuy_col + "_ma_5"] = df[netbuy_col].rolling(window=5, min_periods=3).mean()
-        # df[netbuy_col + "_ma_20"] = df[netbuy_col].rolling(window=20, min_periods=6).mean()
-        # df[netbuy_col + "_ma_60"] = df[netbuy_col].rolling(window=60, min_periods=20).mean()
-        # df[netbuy_col + "_ratio_5"] = np.log(df[netbuy_col].abs() / (df[netbuy_col + "_ma_5"].abs() + 1.0) + 1.0)
-        # df[netbuy_col + "_ratio_20"] = np.log(df[netbuy_col].abs() / (df[netbuy_col + "_ma_20"].abs() + 1.0) + 1.0)
-        # df[netbuy_col + "_ratio_60"] = np.log(df[netbuy_col].abs() / (df[netbuy_col + "_ma_60"].abs() + 1.0) + 1.0)
-        # df[netbuy_col + "_diff"] = df[netbuy_col].abs() / (df[netbuy_col].shift(1).abs() + 1.0)
-        # df[netbuy_col + "_diff"] = np.log(np.clip(df[netbuy_col + "_diff"].values, 0.0, 10.0) + 1.0)
+        df[netbuy_col + "_ma_5"] = df[netbuy_col].rolling(window=5, min_periods=3).mean()
+        df[netbuy_col + "_ma_20"] = df[netbuy_col].rolling(window=20, min_periods=6).mean()
+        df[netbuy_col + "_ma_60"] = df[netbuy_col].rolling(window=60, min_periods=20).mean()
+        df[netbuy_col + "_ratio_5"] = np.log(df[netbuy_col].abs() / (df[netbuy_col + "_ma_5"].abs() + 1.0) + 1.0)
+        df[netbuy_col + "_ratio_20"] = np.log(df[netbuy_col].abs() / (df[netbuy_col + "_ma_20"].abs() + 1.0) + 1.0)
+        df[netbuy_col + "_ratio_60"] = np.log(df[netbuy_col].abs() / (df[netbuy_col + "_ma_60"].abs() + 1.0) + 1.0)
+        df[netbuy_col + "_diff"] = df[netbuy_col].abs() / (df[netbuy_col].shift(1).abs() + 1.0)
+        df[netbuy_col + "_diff"] = np.log(np.clip(df[netbuy_col + "_diff"].values, 0.0, 10.0) + 1.0)
 
     # ===== Label =====
     df[LABEL_COL1] = (df[CLOSE_COL] * 1.0025 < df[CLOSE_COL].shift(-1)).astype(int)

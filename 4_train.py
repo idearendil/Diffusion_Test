@@ -106,14 +106,16 @@ def evaluate(model, loader):
         totals[0] += loss.item()
         totals[1] += loss_bin.item()
 
-        # evaluate complimental curves
-        y1_hat *= predictable
-
-        _, topk = torch.topk(y1_hat, k=3, dim=1)
-        clipped = torch.zeros_like(y1_hat)
-        clipped.scatter_(1, topk, 1.0)
-        denom = torch.sum(clipped, dim=1).mean() + 1e-8
-        exp  = (torch.sum(y[:,:,1] * clipped, dim=1) / denom).mean()
+        prob = torch.sigmoid(y1_hat)
+        mask = (predictable > 0) & (prob >= 0.53)               # 조건 마스크
+        masked_y2 = y2_hat.masked_fill(~mask, float('-inf'))    # 조건 안 맞는 애들 제거
+        topk_vals, topk_idx = torch.topk(masked_y2, k=3, dim=1) # top-3
+        valid = (topk_vals != float('-inf')).all(dim=1)         # 하나라도 -inf 있으면 invalid  # [B]
+        clipped = torch.zeros_like(y1_hat)                      # one-hot
+        clipped.scatter_(1, topk_idx, 1.0)
+        per_day_return = torch.sum(y[:, :, 1] * clipped, dim=1) / 3.0   # 수익률 계산
+        per_day_return = per_day_return * valid.float()         # invalid 날짜는 0 처리
+        exp = per_day_return.mean()
         totals[2] += exp.item()
 
         n_batches += 1
@@ -151,13 +153,16 @@ def evaluate_ensemble(models, loader):
         totals[1] += loss_bin.item()
 
         # evaluate complimental curves
-        y1_hat *= predictable
-
-        _, topk = torch.topk(y1_hat, k=3, dim=1)
-        clipped = torch.zeros_like(y1_hat)
-        clipped.scatter_(1, topk, 1.0)
-        denom = torch.sum(clipped, dim=1).mean() + 1e-8
-        exp  = (torch.sum(y[:,:,1] * clipped, dim=1) / denom).mean()
+        prob = torch.sigmoid(y1_hat)
+        mask = (predictable > 0) & (prob >= 0.53)               # 조건 마스크
+        masked_y2 = y2_hat.masked_fill(~mask, float('-inf'))    # 조건 안 맞는 애들 제거
+        topk_vals, topk_idx = torch.topk(masked_y2, k=3, dim=1) # top-3
+        valid = (topk_vals != float('-inf')).all(dim=1)         # 하나라도 -inf 있으면 invalid  # [B]
+        clipped = torch.zeros_like(y1_hat)                      # one-hot
+        clipped.scatter_(1, topk_idx, 1.0)
+        per_day_return = torch.sum(y[:, :, 1] * clipped, dim=1) / 3.0   # 수익률 계산
+        per_day_return = per_day_return * valid.float()         # invalid 날짜는 0 처리
+        exp = per_day_return.mean()
         totals[2] += exp.item()
 
         n_batches += 1
