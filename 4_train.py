@@ -33,9 +33,10 @@ TEST_BATCH_SIZE = 2048
 
 BIN_LOSS_WEIGHT = 1.0
 MSE_LOSS_WEIGHT = 1.0
+SELF_MASK_RATIO = 0.1
 
 MAX_EPOCHS_RATE = 50 * 800
-MIN_EPOCHS_RATE = 0.6
+MIN_EPOCHS_RATE = 0.0
 LR = 2e-4
 WEIGHT_DECAY = 1e-4
 GRAD_CLIP = 1.0
@@ -46,7 +47,7 @@ AMP = (DEVICE == "cuda")
 # Utils
 # =========================
 def token_mask_ratio(epoch, max_epoch,
-                     start=0.3, end=0.0, end_ratio=0.2):
+                     start=0.0, end=0.0, end_ratio=0.0):
     real_max_epoch = max_epoch - int(end_ratio * max_epoch)
     if epoch <= real_max_epoch:
         alpha = epoch / real_max_epoch
@@ -90,7 +91,7 @@ def evaluate(model, loader):
         x, y = x.to(DEVICE), y.to(DEVICE)
         predictable = (x[:, :, 0] != 0).float()
 
-        y1_hat, y2_hat = model(x)
+        y1_hat, y2_hat = model(x, self_mask_prob=0.0)
 
         # loss_exp = torch.sum(y * masked_confi, dim=1).mean()
         loss_bin = (
@@ -138,7 +139,7 @@ def evaluate_ensemble(models, loader):
         x, y = x.to(DEVICE), y.to(DEVICE)
         predictable = (x[:, :, 0] != 0).float()
 
-        preds = [torch.stack(m(x)) for m in models]
+        preds = [torch.stack(m(x, self_mask_prob=0.0)) for m in models]
         y1_hat, y2_hat = weighted_ensemble(preds)
 
         loss_bin = (
@@ -194,7 +195,7 @@ def train_one_epoch(model, loader, optimizer, scaler, scheduler, epoch, epoch_ma
         optimizer.zero_grad(set_to_none=True)
 
         with torch.amp.autocast("cuda", enabled=AMP):
-            y1_hat, y2_hat = model(x)
+            y1_hat, y2_hat = model(x, self_mask_prob=SELF_MASK_RATIO)
 
             loss_bin = (
                 F.binary_cross_entropy_with_logits(
