@@ -20,7 +20,7 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 START_SEED_MONEY = 1_000_000.0   # 시작 자금 (원, 단위 자유)
 TOP_K = 3                        # 하루에 매매할 종목 개수
-LINEAR_BUY_THRESHOLD = [0.53, 0.53]
+LINEAR_BUY_THRESHOLD = [0.53, 0.5]
 HALT_THRESHOLD = 0.0            # 한 달의 수익률이 이보다 낮으면 그 달은 skip
 
 # =========================
