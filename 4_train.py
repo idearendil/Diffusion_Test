@@ -30,9 +30,6 @@ SEEDS = [6, 7, 8]
 TRAIN_BATCH_SIZE = 16
 TEST_BATCH_SIZE = 2048
 
-BIN_LOSS_WEIGHT = 1.0
-MSE_LOSS_WEIGHT = 1.0
-
 MAX_EPOCHS_RATE = 50 * 800
 MIN_EPOCHS_RATE = 0.6
 LR = 2e-4
@@ -45,7 +42,7 @@ AMP = (DEVICE == "cuda")
 # Utils
 # =========================
 def token_mask_ratio(epoch, max_epoch,
-                     start=0.3, end=0.0, end_ratio=0.2):
+                     start=0.0, end=0.0, end_ratio=0.2):
     real_max_epoch = max_epoch - int(end_ratio * max_epoch)
     if epoch <= real_max_epoch:
         alpha = epoch / real_max_epoch
@@ -70,9 +67,54 @@ def weighted_ensemble(preds: List[torch.Tensor]):
     w = torch.clamp(w, min=0.0)
     w = w / (w.sum() + 1e-8)
 
-    stacked = torch.stack(preds)  # [M, 2, B, N]
-    y_hat = (stacked * w[:, None, None, None]).sum(0)
-    return y_hat[0], y_hat[1]
+    stacked = torch.stack(preds)  # [M, B, N, 19]
+    y_logit = (stacked * w[:, None, None, None]).sum(0)
+    return y_logit
+
+
+def build_bins(device):
+    # [-9 ~ -1], 0, [1 ~ 9]
+    bins = list(range(-9, 10))
+    return torch.tensor(bins, dtype=torch.float32, device=device)  # [19]
+
+
+def restore_bins():
+    neg = -torch.pow(2.0, -torch.arange(1, 10, dtype=torch.float32))
+    zero = torch.tensor([0.0])
+    pos = torch.pow(2.0, -torch.arange(9, 0, -1, dtype=torch.float32))
+    return torch.cat([neg, zero, pos])
+
+
+def y_to_twohot_log(y, bins, device):
+    """
+    y: [T, N] (이미 log-domain + sign 적용된 값)
+    return: [T, N, 19]
+    """
+
+    T, N = y.shape
+    y_flat = y.view(-1)  # [T*N]
+
+    # 각 y가 들어갈 bin 위치 찾기
+    diff = y_flat.unsqueeze(1) - bins.unsqueeze(0)  # [T*N, 19]
+
+    # left index (y보다 작거나 같은 가장 큰 bin)
+    left_idx = torch.clamp((diff >= 0).sum(dim=1) - 1, 0, len(bins)-2)
+    right_idx = left_idx + 1
+    left_bin = bins[left_idx]
+    right_bin = bins[right_idx]
+
+    # linear interpolation weight
+    w = (y_flat - left_bin) / (right_bin - left_bin)
+    w = torch.clamp(w, 0.0, 1.0)
+    left_w = 1.0 - w
+    right_w = w
+
+    # two-hot 생성
+    out = torch.zeros(y_flat.shape[0], len(bins), device=device)
+    out.scatter_(1, left_idx.unsqueeze(1), left_w.unsqueeze(1))
+    out.scatter_(1, right_idx.unsqueeze(1), right_w.unsqueeze(1))
+
+    return out.view(T, N, len(bins))
 
 
 # =========================
@@ -84,36 +126,33 @@ def evaluate(model, loader):
 
     totals = [0.0] * 3
     n_batches = 0
+    bins = build_bins(DEVICE)
+    true_bins = restore_bins().reshape(1, 1, -1).to(DEVICE)
 
     for x, y in loader:
-        x, y = x.to(DEVICE), y.to(DEVICE)
+        x, orig_y = x.to(DEVICE), y.to(DEVICE)
+        y = y_to_twohot_log(orig_y, bins, DEVICE)
+
         predictable = (x[:, :, 0] != 0).float()
 
-        y1_hat, y2_hat = model(x)
+        y_logit = model(x)
 
-        # loss_exp = torch.sum(y * masked_confi, dim=1).mean()
-        loss_bin = (
-            F.binary_cross_entropy_with_logits(
-                y1_hat,
-                y[:,:,0].float(),
-                reduction='none'
-            ) * predictable
-        ).sum() / (predictable.sum() + 1e-8)
-        loss_mse = ((y2_hat - y[:,:,1]) ** 2 * predictable).sum() / (predictable.sum() + 1e-8)
-
-        loss = loss_bin * BIN_LOSS_WEIGHT + loss_mse * MSE_LOSS_WEIGHT
+        log_probs = F.log_softmax(y_logit, dim=-1)  # [T, N, 19]                    # log softmax
+        loss_per_token = -(y * log_probs).sum(dim=-1)  # [T, N]                     # soft cross entropy
+        loss = (loss_per_token * predictable).sum() / (predictable.sum() + 1e-8)    # mask 적용
 
         totals[0] += loss.item()
-        totals[1] += loss_bin.item()
+        totals[1] += loss.item()
 
-        prob = torch.sigmoid(y1_hat)
-        mask = (predictable > 0) & (prob >= 0.53)               # 조건 마스크
-        masked_y2 = y2_hat.masked_fill(~mask, float('-inf'))    # 조건 안 맞는 애들 제거
-        topk_vals, topk_idx = torch.topk(masked_y2, k=3, dim=1) # top-3
+        # evaluate complimental curves
+        y_hat = (F.softmax(y_logit, dim=-1) * true_bins).sum(dim=-1)  # [T, N]
+        mask = (predictable > 0)                                # 조건 마스크
+        masked_y = y_hat.masked_fill(~mask, float('-inf'))      # 조건 안 맞는 애들 제거
+        topk_vals, topk_idx = torch.topk(masked_y, k=3, dim=1)  # top-3
         valid = (topk_vals != float('-inf')).all(dim=1)         # 하나라도 -inf 있으면 invalid  # [B]
-        clipped = torch.zeros_like(y1_hat)                      # one-hot
+        clipped = torch.zeros_like(y_hat)                       # one-hot
         clipped.scatter_(1, topk_idx, 1.0)
-        per_day_return = torch.sum(y[:, :, 1] * clipped, dim=1) / 3.0   # 수익률 계산
+        per_day_return = torch.sum(orig_y * clipped, dim=1) / 3.0   # 수익률 계산
         per_day_return = per_day_return * valid.float()         # invalid 날짜는 0 처리
         exp = per_day_return.mean()
         totals[2] += exp.item()
@@ -130,37 +169,33 @@ def evaluate_ensemble(models, loader):
 
     totals = [0.0] * 3
     n_batches = 0
+    bins = build_bins(DEVICE)
+    true_bins = restore_bins().reshape(1, 1, -1).to(DEVICE)
 
     for x, y in loader:
-        x, y = x.to(DEVICE), y.to(DEVICE)
+        x, orig_y = x.to(DEVICE), y.to(DEVICE)
+        y = y_to_twohot_log(orig_y, bins, DEVICE)
+
         predictable = (x[:, :, 0] != 0).float()
 
-        preds = [torch.stack(m(x)) for m in models]
-        y1_hat, y2_hat = weighted_ensemble(preds)
-
-        loss_bin = (
-            F.binary_cross_entropy_with_logits(
-                y1_hat,
-                y[:,:,0].float(),
-                reduction='none'
-            ) * predictable
-        ).sum() / (predictable.sum() + 1e-8)
-        loss_mse = ((y2_hat - y[:,:,1]) ** 2 * predictable).sum() / (predictable.sum() + 1e-8)
-
-        loss = loss_bin * BIN_LOSS_WEIGHT + loss_mse * MSE_LOSS_WEIGHT
+        preds = [m(x) for m in models]
+        y_logit = weighted_ensemble(preds)
+        log_probs = F.log_softmax(y_logit, dim=-1)  # [T, N, 19]                    # log softmax
+        loss_per_token = -(y * log_probs).sum(dim=-1)  # [T, N]                     # soft cross entropy
+        loss = (loss_per_token * predictable).sum() / (predictable.sum() + 1e-8)    # mask 적용
 
         totals[0] += loss.item()
-        totals[1] += loss_bin.item()
+        totals[1] += loss.item()
 
         # evaluate complimental curves
-        prob = torch.sigmoid(y1_hat)
-        mask = (predictable > 0) & (prob >= 0.53)               # 조건 마스크
-        masked_y2 = y2_hat.masked_fill(~mask, float('-inf'))    # 조건 안 맞는 애들 제거
-        topk_vals, topk_idx = torch.topk(masked_y2, k=3, dim=1) # top-3
+        y_hat = (F.softmax(y_logit, dim=-1) * true_bins).sum(dim=-1)  # [T, N]
+        mask = (predictable > 0)                                # 조건 마스크
+        masked_y = y_hat.masked_fill(~mask, float('-inf'))      # 조건 안 맞는 애들 제거
+        topk_vals, topk_idx = torch.topk(masked_y, k=3, dim=1)  # top-3
         valid = (topk_vals != float('-inf')).all(dim=1)         # 하나라도 -inf 있으면 invalid  # [B]
-        clipped = torch.zeros_like(y1_hat)                      # one-hot
+        clipped = torch.zeros_like(y_hat)                       # one-hot
         clipped.scatter_(1, topk_idx, 1.0)
-        per_day_return = torch.sum(y[:, :, 1] * clipped, dim=1) / 3.0   # 수익률 계산
+        per_day_return = torch.sum(orig_y * clipped, dim=1) / 3.0   # 수익률 계산
         per_day_return = per_day_return * valid.float()         # invalid 날짜는 0 처리
         exp = per_day_return.mean()
         totals[2] += exp.item()
@@ -179,36 +214,22 @@ def train_one_epoch(model, loader, optimizer, scaler, scheduler, epoch, epoch_ma
 
     running = 0.0
     n_batches = 0
+    bins = build_bins(DEVICE)
 
     for x, y in loader:
-        x, y = x.to(DEVICE), y.to(DEVICE)
-        predictable = (x[:, :, 0] != 0).float()
+        x, orig_y = x.to(DEVICE), y.to(DEVICE)
+        y = y_to_twohot_log(orig_y, bins, DEVICE)
 
-        # mask = predictable
-        # valid_count = mask.sum(dim=1, keepdim=True).clamp(min=1)
-        # mean = (y * mask).sum(dim=1, keepdim=True) / valid_count
-        # var = ((y - mean) * mask).pow(2).sum(dim=1, keepdim=True) / valid_count
-        # std = var.sqrt().clamp(min=1e-6)
-        # y_norm = (y - mean) / std
+        predictable = (x[:, :, 0] != 0).float()
 
         x = apply_token_mask(x, mask_ratio)
 
         optimizer.zero_grad(set_to_none=True)
-
         with torch.amp.autocast("cuda", enabled=AMP):
-            y1_hat, y2_hat = model(x)
-
-            # loss_exp = torch.sum(y * masked_confi, dim=1).mean()
-            loss_bin = (
-                F.binary_cross_entropy_with_logits(
-                    y1_hat,
-                    y[:,:,0].float(),
-                    reduction='none'
-                ) * predictable
-            ).sum() / (predictable.sum() + 1e-8)
-            loss_mse = ((y2_hat - y[:,:,1]) ** 2 * predictable).sum() / (predictable.sum() + 1e-8)
-
-            loss = loss_bin * BIN_LOSS_WEIGHT + loss_mse * MSE_LOSS_WEIGHT
+            y_logit = model(x)
+            log_probs = F.log_softmax(y_logit, dim=-1)  # [B, N, 19]                    # log softmax
+            loss_per_token = -(y * log_probs).sum(dim=-1)  # [B, N]                     # soft cross entropy
+            loss = (loss_per_token * predictable).sum() / (predictable.sum() + 1e-8)    # mask 적용
 
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)

@@ -20,7 +20,8 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 START_SEED_MONEY = 1_000_000.0   # 시작 자금 (원, 단위 자유)
 TOP_K = 3                        # 하루에 매매할 종목 개수
-LINEAR_BUY_THRESHOLD = [0.53, 0.53]
+LINEAR_Z = [0.2, 0.0]          # z=0.675 => 75%
+BUY_THRESHOLD = 0.0022
 HALT_THRESHOLD = 0.0            # 한 달의 수익률이 이보다 낮으면 그 달은 skip
 
 # =========================
@@ -44,8 +45,8 @@ def sigmoid(x):
 # Main Backtest
 # =========================
 def main():
-    binary_files = sorted(INFER_DIR.glob("*_binary.csv"))
-    regression_files = sorted(INFER_DIR.glob("*_regression.csv"))
+    mean_files = sorted(INFER_DIR.glob("*_mean.csv"))
+    std_files = sorted(INFER_DIR.glob("*_std.csv"))
     test_val_lst = pickle.load(open(TEST_VAL_LST_PATH, "rb"))
 
     seed_money = START_SEED_MONEY
@@ -56,24 +57,24 @@ def main():
 
     print("===== Backtest start =====")
 
-    buy_threshold_idx = -1
-    for binary_path, regression_path in tqdm(zip(binary_files, regression_files)):
-        buy_threshold_idx += 1
-        buy_threshold_ratio = buy_threshold_idx / (len(binary_files) - 1)
-        buy_threshold = LINEAR_BUY_THRESHOLD[0] + (LINEAR_BUY_THRESHOLD[1] - LINEAR_BUY_THRESHOLD[0]) * buy_threshold_ratio
+    z_idx = -1
+    for mean_path, std_path in tqdm(zip(mean_files, std_files)):
+        z_idx += 1
+        z_ratio = z_idx / (len(mean_files) - 1)
+        z_value = LINEAR_Z[0] + (LINEAR_Z[1] - LINEAR_Z[0]) * z_ratio
         
-        binary_df = pd.read_csv(binary_path, index_col=0)
-        binary_df.index = pd.to_datetime(binary_df.index)
-        regression_df = pd.read_csv(regression_path, index_col=0)
-        regression_df.index = pd.to_datetime(regression_df.index)
+        mean_df = pd.read_csv(mean_path, index_col=0)
+        mean_df.index = pd.to_datetime(mean_df.index)
+        std_df = pd.read_csv(std_path, index_col=0)
+        std_df.index = pd.to_datetime(std_df.index)
+
+        score_df = mean_df - std_df * z_value
 
         return_record = []
         halt_flag = False
 
-        for binary_tuple, regression_tuple in zip(binary_df.iterrows(), regression_df.iterrows()):
-            date, binary_row = binary_tuple
-            _, regression_row = regression_tuple
-            scores = regression_row.sort_values(ascending=False)
+        for date, score_row in score_df.iterrows():
+            scores = score_row.sort_values(ascending=False)
 
             selected = []
             for ticker in scores.index:
@@ -86,7 +87,7 @@ def main():
                     print(f"Missing date: {ticker} {date}")
                     continue
 
-                if ref_df.loc[date, "predictable"] == 1.0 and sigmoid(binary_row[ticker]) > buy_threshold:
+                if ref_df.loc[date, "predictable"] == 1.0 and score_row[ticker] > BUY_THRESHOLD:
                     selected.append(ticker)
                     if len(selected) >= TOP_K:
                         break

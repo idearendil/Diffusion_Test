@@ -25,6 +25,12 @@ OUT_ROOT.mkdir(parents=True, exist_ok=True)
 SEEDS = [6, 7, 8]
 
 
+def restore_bins():
+    neg = -torch.pow(2.0, -torch.arange(1, 10, dtype=torch.float32))
+    zero = torch.tensor([0.0])
+    pos = torch.pow(2.0, -torch.arange(9, 0, -1, dtype=torch.float32))
+    return torch.cat([neg, zero, pos])
+
 # =========================
 # Load trading days
 # =========================
@@ -86,16 +92,14 @@ def load_ensemble_weights(date):
 # =========================
 @torch.no_grad()
 def run_ensemble(models, X, weights):
-    preds1 = []
-    preds2 = []
-
+    preds = []
     for model_id, model in zip(SEEDS, models):
         model.eval()
-        y1_hat, y2_hat = model(X)   # [T, N]
-        preds1.append(y1_hat * weights[model_id])
-        preds2.append(y2_hat * weights[model_id])
+        y_logit = model(X)   # [T, N, 19]
+        y_prob = torch.nn.functional.softmax(y_logit, dim=-1)   # [T, N, 19]
+        preds.append(y_prob * weights[model_id])
 
-    return torch.stack(preds1).sum(dim=0), torch.stack(preds2).sum(dim=0)  # [T, N]
+    return torch.stack(preds).sum(dim=0)  # [T, N, 19]
 
 
 # =========================
@@ -103,13 +107,15 @@ def run_ensemble(models, X, weights):
 # =========================
 def main():
     date_dirs = sorted([d for d in TENSOR_ROOT.iterdir() if d.is_dir()])
+    bins = restore_bins()
+    bins = bins.reshape(1, 1, -1)
 
     for date_dir in date_dirs:
         date = date_dir.name
         print(f"\n===== Inference {date} =====")
 
-        out_csv1 = OUT_ROOT / f"{date}_binary.csv"
-        out_csv2 = OUT_ROOT / f"{date}_regression.csv"
+        out_csv1 = OUT_ROOT / f"{date}_mean.csv"
+        out_csv2 = OUT_ROOT / f"{date}_std.csv"
         if out_csv1.exists():
             print(f"[SKIP] {date} already inferred")
             continue
@@ -156,9 +162,11 @@ def main():
         # -------------------------
         # Inference
         # -------------------------
-        Y1_hat, Y2_hat = run_ensemble(models, X, ensemble_weights)  # [T, N]
-        Y1_hat = Y1_hat.cpu().numpy()
-        Y2_hat = Y2_hat.cpu().numpy()
+        Y_prob = run_ensemble(models, X, ensemble_weights).cpu()  # [T, N, 19]
+        Y_mean = (Y_prob * bins).sum(dim=-1)  # [T, N]
+        Y_std = torch.sqrt((Y_prob * (bins - Y_mean.unsqueeze(-1)) ** 2).sum(dim=-1))  # [T, N]
+        Y_mean = Y_mean.numpy()
+        Y_std = Y_std.numpy()
 
         # -------------------------
         # Trading days
@@ -180,10 +188,10 @@ def main():
         # -------------------------
         # Save CSV
         # -------------------------
-        df = pd.DataFrame(Y1_hat, index=trading_days, columns=tickers)
+        df = pd.DataFrame(Y_mean, index=trading_days, columns=tickers)
         df.index.name = "date"
         df.to_csv(out_csv1)
-        df = pd.DataFrame(Y2_hat, index=trading_days, columns=tickers)
+        df = pd.DataFrame(Y_std, index=trading_days, columns=tickers)
         df.index.name = "date"
         df.to_csv(out_csv2)
 

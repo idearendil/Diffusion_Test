@@ -23,8 +23,7 @@ VOLUME_COL = "거래량"
 
 INVESTORS_COL = ["기관합계", "기타법인", "개인", "외국인합계"]
 
-LABEL_COL1 = "label1"
-LABEL_COL2 = "label2"
+LABEL_COL = "label"
 CHANGE_RATE_COL = "ret_pct"  # 종가 기준 일간 수익률(%)
 
 TEST_START = pd.Timestamp("2020-01-01")
@@ -79,7 +78,7 @@ def split_3month(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
 def clip_features(df: pd.DataFrame) -> pd.DataFrame:
     """(label, vol_* 제외) feature를 -10~10 클리핑"""
     df = df.copy()
-    feature_cols = [c for c in df.columns if c != LABEL_COL1 and c != LABEL_COL2 and c != DATE_COL]
+    feature_cols = [c for c in df.columns if c != LABEL_COL and c != DATE_COL]
     feature_cols = [c for c in feature_cols if c != "day_of_week" and c != "day_of_month"]
     clip_cols = [c for c in feature_cols if not is_volume_related(c)]
     if clip_cols:
@@ -91,20 +90,20 @@ def standardize_df(df: pd.DataFrame, feature_cols: List[str], mean: pd.Series, s
     df = df.copy()
 
     # 컬럼 순서 맞춤
-    df = df[[*feature_cols, LABEL_COL1, LABEL_COL2]]
+    df = df[[*feature_cols, LABEL_COL]]
 
     x = (df[feature_cols] - mean) / std
     x = x.fillna(0.0)
 
     x['predictable'] = np.where(x['predictable'] > 0, 1, 0)
 
-    out = pd.concat([x, df[[LABEL_COL1, LABEL_COL2]].astype(np.float32)], axis=1)
+    out = pd.concat([x, df[[LABEL_COL]].astype(np.float32)], axis=1)
     return out
 
 
 def save_tensors(df: pd.DataFrame, feature_cols: List[str], out_dir: Path, ticker: str) -> None:
     x = df[feature_cols].values.astype(np.float32)
-    y = df[[LABEL_COL1, LABEL_COL2]].values.astype(np.float32)
+    y = df[LABEL_COL].values.astype(np.float32)
 
     x_t = torch.tensor(x, dtype=torch.float32)
     y_t = torch.tensor(y, dtype=torch.float32)
@@ -287,8 +286,14 @@ def add_features_and_labels(df: pd.DataFrame, ticker: str) -> pd.DataFrame:
         df[netbuy_col + "_diff"] = np.log(np.clip(df[netbuy_col + "_diff"].values, 0.0, 10.0) + 1.0)
 
     # ===== Label =====
-    df[LABEL_COL1] = (df[CLOSE_COL] * 1.0025 < df[CLOSE_COL].shift(-1)).astype(int)
-    df[LABEL_COL2] = (df[CLOSE_COL].shift(-1) / df[CLOSE_COL] - 1) * 10.0
+    ret = np.where(
+        df[CLOSE_COL].shift(-1) >= df[CLOSE_COL],
+        (df[CLOSE_COL].shift(-1) / df[CLOSE_COL] - 1),
+        -(df[CLOSE_COL] / df[CLOSE_COL].shift(-1) - 1)
+    )
+    log_val = np.log2(np.abs(ret) + 1e-12) + 9.0   # (-inf ~ +8.0 근처)
+    log_val = np.clip(log_val, 0.0, None)
+    df[LABEL_COL] = np.sign(ret) * log_val
 
     # 다음날 없는 마지막 행 + 이전 행들이 적은 첫 부분 행들 제거
     df = df.dropna()
@@ -324,7 +329,7 @@ def prepare_full_dfs() -> Tuple[Dict[str, pd.DataFrame], List[str]]:
         full_dfs[ticker] = df
 
         # feature cols order
-        cur_feats = [c for c in df.columns if c not in (LABEL_COL1, LABEL_COL2, DATE_COL)]
+        cur_feats = [c for c in df.columns if c not in (LABEL_COL, DATE_COL)]
         if not feature_cols_order:
             feature_cols_order = cur_feats
         else:
@@ -342,7 +347,7 @@ def build_monthly_backtest_datasets():
     tickers = sorted(full_dfs.keys())
     print(f"Tickers loaded: {len(tickers)}")
     print(f"Num features: {len(feature_cols)}")
-    all_cols = feature_cols + [LABEL_COL1, LABEL_COL2]
+    all_cols = feature_cols + [LABEL_COL]
 
     # 월 시작 리스트 (MS = month start)
     month_starts = pd.date_range(TEST_START, TEST_END, freq="MS")
@@ -422,12 +427,9 @@ def build_monthly_backtest_datasets():
             te_std = clip_features(te_std)
 
             # label clip 일관 적용
-            tr_std[LABEL_COL1] = np.clip(tr_std[LABEL_COL1].values, -10.0, 10.0)
-            va_std[LABEL_COL1] = np.clip(va_std[LABEL_COL1].values, -10.0, 10.0)
-            te_std[LABEL_COL1] = np.clip(te_std[LABEL_COL1].values, -10.0, 10.0)
-            tr_std[LABEL_COL2] = np.clip(tr_std[LABEL_COL2].values, -10.0, 10.0)
-            va_std[LABEL_COL2] = np.clip(va_std[LABEL_COL2].values, -10.0, 10.0)
-            te_std[LABEL_COL2] = np.clip(te_std[LABEL_COL2].values, -10.0, 10.0)
+            tr_std[LABEL_COL] = np.clip(tr_std[LABEL_COL].values, -10.0, 10.0)
+            va_std[LABEL_COL] = np.clip(va_std[LABEL_COL].values, -10.0, 10.0)
+            te_std[LABEL_COL] = np.clip(te_std[LABEL_COL].values, -10.0, 10.0)
 
             save_tensors(tr_std, feature_cols, train_out, tkr)
             save_tensors(va_std, feature_cols, val_out, tkr)
@@ -470,7 +472,7 @@ def build_monthly_backtest_datasets():
             years = sorted(all_df["year"].unique())
 
             # feature + label 각각 plot
-            plot_cols = feature_cols + [LABEL_COL1, LABEL_COL2]
+            plot_cols = feature_cols + [LABEL_COL]
 
             for col in plot_cols:
                 plt.figure(figsize=(10, 6))

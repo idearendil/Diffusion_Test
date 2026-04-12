@@ -33,8 +33,7 @@ class RegressionTransformer(nn.Module):
         )
         self.encoder = nn.TransformerEncoder(encoder_layer, n_layers)
 
-        self.head = nn.Linear(d_model, 1)
-        self.confidence_head = nn.Linear(d_model, 1)
+        self.head = nn.Linear(d_model, 19)
         
         self._reset_parameters()
 
@@ -59,6 +58,5 @@ class RegressionTransformer(nn.Module):
 
         h = self.encoder(h)
 
-        out1 = self.head(h).squeeze()  # [B, N]
-        out2 = self.confidence_head(h).squeeze() # [B, N]
-        return out1, out2
+        out = self.head(h)  # [B, N, 15]
+        return out
