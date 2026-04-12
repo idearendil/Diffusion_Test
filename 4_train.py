@@ -1,6 +1,7 @@
 import csv
 from pathlib import Path
 from typing import List
+import math
 
 import torch
 import pickle
@@ -120,7 +121,9 @@ def evaluate(model, loader):
 
         n_batches += 1
 
-    return [t / n_batches for t in totals]
+    totals = [t / n_batches for t in totals]
+    totals[2] = math.exp(totals[2] / 20.0)
+    return totals
 
 
 @torch.no_grad()
@@ -167,7 +170,9 @@ def evaluate_ensemble(models, loader):
 
         n_batches += 1
 
-    return [t / n_batches for t in totals]
+    totals = [t / n_batches for t in totals]
+    totals[2] = math.exp(totals[2] / 20.0)
+    return totals
 
 
 # =========================
@@ -184,13 +189,6 @@ def train_one_epoch(model, loader, optimizer, scaler, scheduler, epoch, epoch_ma
         x, y = x.to(DEVICE), y.to(DEVICE)
         predictable = (x[:, :, 0] != 0).float()
 
-        # mask = predictable
-        # valid_count = mask.sum(dim=1, keepdim=True).clamp(min=1)
-        # mean = (y * mask).sum(dim=1, keepdim=True) / valid_count
-        # var = ((y - mean) * mask).pow(2).sum(dim=1, keepdim=True) / valid_count
-        # std = var.sqrt().clamp(min=1e-6)
-        # y_norm = (y - mean) / std
-
         x = apply_token_mask(x, mask_ratio)
 
         optimizer.zero_grad(set_to_none=True)
@@ -198,7 +196,6 @@ def train_one_epoch(model, loader, optimizer, scaler, scheduler, epoch, epoch_ma
         with torch.amp.autocast("cuda", enabled=AMP):
             y1_hat, y2_hat = model(x)
 
-            # loss_exp = torch.sum(y * masked_confi, dim=1).mean()
             loss_bin = (
                 F.binary_cross_entropy_with_logits(
                     y1_hat,
