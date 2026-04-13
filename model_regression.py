@@ -41,7 +41,7 @@ class RegressionTransformer(nn.Module):
     def _reset_parameters(self):
         nn.init.normal_(self.stock_embedding.weight, std=0.02)
 
-    def forward(self, x, self_mask_prob):
+    def forward(self, x):
         """
         x: [B, N, F]
         """
@@ -50,44 +50,15 @@ class RegressionTransformer(nn.Module):
 
         # stock id embedding
         stock_ids = torch.arange(N, device=device)
-        stock_emb = self.stock_embedding(stock_ids)[None, :, :]
+        stock_emb = self.stock_embedding(stock_ids)[None, :, :]  # [1, N, in_dim]
+
         x = x + stock_emb
 
         # feature embedding
         h = self.feature_proj(x)  # [B, N, d_model]
 
-        # =========================
-        # 🔥 self-attention masking
-        # =========================
-        if self.training and self_mask_prob > 0:
-            # [B, N]에서 각 token이 자기 자신을 볼지 말지 결정
-            mask_flag = torch.rand(B, N, device=device) < self_mask_prob  # True면 막음
+        h = self.encoder(h)
 
-            # attention mask: [B, N, N]
-            attn_mask = torch.zeros(B, N, N, device=device)
-
-            # diagonal만 -inf 처리
-            for b in range(B):
-                idx = torch.arange(N, device=device)
-                attn_mask[b, idx, idx] = torch.where(
-                    mask_flag[b],
-                    torch.tensor(float('-inf'), device=device),
-                    torch.tensor(0.0, device=device)
-                )
-
-            # transformer expects [B*n_head, N, N] or [N,N]
-            # -> batch별 다르게 하려면 expand 필요
-            attn_mask = attn_mask.repeat_interleave(self.encoder.layers[0].self_attn.num_heads, dim=0)
-
-            h = self.encoder(h, mask=attn_mask)
-
-        else:
-            h = self.encoder(h)
-
-        # =========================
-        # heads
-        # =========================
-        out1 = self.head(h).squeeze(-1)
-        out2 = self.confidence_head(h).squeeze(-1)
-
+        out1 = self.head(h).squeeze()  # [B, N]
+        out2 = self.confidence_head(h).squeeze() # [B, N]
         return out1, out2

@@ -91,7 +91,7 @@ def run_ensemble(models, X, weights):
 
     for model_id, model in zip(SEEDS, models):
         model.eval()
-        y1_hat, y2_hat = model(X, self_mask_prob=0.0)   # [T, N]
+        y1_hat, y2_hat = model(X)   # [T, N]
         preds1.append(y1_hat * weights[model_id])
         preds2.append(y2_hat * weights[model_id])
 
