@@ -144,10 +144,10 @@ def add_features_and_labels(df: pd.DataFrame, ticker: str) -> pd.DataFrame:
     df[CHANGE_RATE_COL] = (df[CLOSE_COL] / (df[CLOSE_COL].shift(1) + 1e-12) - 1.0) * 100.0
 
     # 1) 거래량 = 거래량 * 시가 (원 코드 유지)
-    # df["vol_log"] = np.log(df[VOLUME_COL] * df[OPEN_COL] + 1.0)
-    # df["vol_log_ma_5"] = df["vol_log"].rolling(window=5, min_periods=3).mean()
-    # df["vol_log_ma_20"] = df["vol_log"].rolling(window=20, min_periods=6).mean()
-    # df["vol_log_ma_60"] = df["vol_log"].rolling(window=60, min_periods=20).mean()
+    df["vol_log"] = np.log(df[VOLUME_COL] * df[OPEN_COL] + 1.0)
+    df["vol_log_ma_5"] = df["vol_log"].rolling(window=5, min_periods=3).mean()
+    df["vol_log_ma_20"] = df["vol_log"].rolling(window=20, min_periods=6).mean()
+    df["vol_log_ma_60"] = df["vol_log"].rolling(window=60, min_periods=20).mean()
     df["vol_ma_5"] = df[VOLUME_COL].rolling(window=5, min_periods=3).mean()
     df["vol_ma_20"] = df[VOLUME_COL].rolling(window=20, min_periods=6).mean()
     df["vol_ma_60"] = df[VOLUME_COL].rolling(window=60, min_periods=20).mean()
@@ -257,10 +257,10 @@ def add_features_and_labels(df: pd.DataFrame, ticker: str) -> pd.DataFrame:
         df[netbuy_col] = df[f"매수_{c}"] - df[f"매도_{c}"]
         df.drop(columns=[f"매수_{c}", f"매도_{c}"], inplace=True)
 
-        # df[volume_col + "_log"] = np.log(df[volume_col] + 1.0)
-        # df[volume_col + "_log_ma_5"] = df[volume_col + "_log"].rolling(window=5, min_periods=3).mean()
-        # df[volume_col + "_log_ma_20"] = df[volume_col + "_log"].rolling(window=20, min_periods=6).mean()
-        # df[volume_col + "_log_ma_60"] = df[volume_col + "_log"].rolling(window=60, min_periods=20).mean()
+        df[volume_col + "_log"] = np.log(df[volume_col] + 1.0)
+        df[volume_col + "_log_ma_5"] = df[volume_col + "_log"].rolling(window=5, min_periods=3).mean()
+        df[volume_col + "_log_ma_20"] = df[volume_col + "_log"].rolling(window=20, min_periods=6).mean()
+        df[volume_col + "_log_ma_60"] = df[volume_col + "_log"].rolling(window=60, min_periods=20).mean()
         df[volume_col + "_ma_5"] = df[volume_col].rolling(window=5, min_periods=3).mean()
         df[volume_col + "_ma_20"] = df[volume_col].rolling(window=20, min_periods=6).mean()
         df[volume_col + "_ma_60"] = df[volume_col].rolling(window=60, min_periods=20).mean()

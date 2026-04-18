@@ -22,7 +22,7 @@ REFINED_DIR = Path("refined_data")
 
 OUT_ROOT.mkdir(parents=True, exist_ok=True)
 
-SEEDS = [6, 7, 8]
+SEEDS = [1, 2, 3]
 
 
 # =========================

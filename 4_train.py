@@ -26,7 +26,7 @@ BASE_OUT_ROOT.mkdir(parents=True, exist_ok=True)
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-SEEDS = [6, 7, 8]
+SEEDS = [1, 2, 3]
 
 TRAIN_BATCH_SIZE = 16
 TEST_BATCH_SIZE = 2048
